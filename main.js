@@ -2154,8 +2154,8 @@ function buildPreview() {
 function layoutPreviewCam() {
   previewCam.aspect = innerWidth / innerHeight;
   const portrait = innerWidth < innerHeight;
-  previewCam.position.set(0, portrait ? 4.2 : 3.5, portrait ? 17 : 12);
-  previewCam.lookAt(0, portrait ? -2.2 : -0.6, 0);
+  previewCam.position.set(0, portrait ? 4.2 : 3.6, portrait ? 18 : 16.5);
+  previewCam.lookAt(0, portrait ? -3.2 : -1.9, 0);
   previewCam.updateProjectionMatrix();
 }
 
