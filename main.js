@@ -892,6 +892,7 @@ const state = { mode: 'loading', selected: 0, difficulty: 1, speedLevel: 0, auto
 const input = { left: false, right: false, gas: false, brake: false };
 const G = 36;          // 重力
 const SPIN_T = 1.3;    // 轉圈圈秒數
+const MAX_UP_V = 22;   // 在地面時最大往上速度（跳台起飛約 12～18）
 const ITEMS = {
   rocket: { icon: '🚀', name: '火箭衝刺', w: [1, 3, 5, 6] },
   bomb: { icon: '💣', name: '花生炸彈', w: [2, 4, 4, 4] },
@@ -922,7 +923,9 @@ function placeCar(car, idx, lat) {
   car.x = p.x + s.x * lat; car.z = p.z + s.z * lat;
   car.heading = Math.atan2(TAN[idx].x, TAN[idx].z);
   car.y = car.prevSy = surfaceY(car);
-  car.vy = 0; car.air = false;
+  car.vy = 0; car.air = false; car.airT = 0;
+  car.safeP = car.stuckP = car.lap * N + idx;
+  car.stuckT = 0;
 }
 const progress = (c) => c.lap * N + c.idx;
 const speedMul = () => SPEED_MUL[state.speedLevel];
@@ -1018,27 +1021,44 @@ function updateCar(car, dt, ctl) {
     updateIdx(car);
     sy = surfaceY(car);
   }
-  const gv = (sy - car.prevSy) / dt;
+  // 地面高度如果一瞬間跳很多（跳台側邊、被欄杆推回橋面），只當成爬上去，不能變成火箭往上噴
+  const gv = clamp((sy - car.prevSy) / dt, -80, MAX_UP_V);
   car.prevSy = sy;
   if (car.air) {
-    car.vy -= G * dt;
+    car.vy = Math.max(car.vy - G * dt, -60);
     car.y += car.vy * dt;
+    car.airT += dt;
     if (car.y <= sy) {
       if (car.isPlayer && car.vy < -12) { Sound.land(); state.shake = Math.min(0.5, -car.vy * 0.02); }
-      car.y = sy; car.vy = gv; car.air = false;
+      car.y = sy; car.vy = gv; car.air = false; car.airT = 0;
     }
   } else if (gv < car.vy - G * dt - 0.6) {
     car.air = true;
+    car.airT = 0;
     car.vy -= G * dt;
     car.y += car.vy * dt;
   } else {
     car.vy = gv;
     car.y = sy;
   }
-  if (car.air && car.y < roadY(car.s) - 7 && canyonF(car.x, car.z) > 0.3) {
+  // 掉進峽谷（不論是飛進去還是開下去）→ 回到橋前
+  if (car.y < roadY(car.s) - 7 && canyonF(car.x, car.z) > 0.3) {
     car.fallT = 1.4;
     car.speed = 0;
+    car.air = true;
     if (car.isPlayer) { Sound.fall(); showBanner('掉下去了～！', 1400); }
+    return;
+  }
+  // 記住最近一次安全的位置（在路面上、沒在飛、不在峽谷）
+  if (!car.air && Math.abs(car.lat) < HW && canyonF(car.x, car.z) < 0.02) car.safeP = car.lap * N + car.idx;
+  // 保險：飛太久、飛太高、或卡住不動太久，就回到安全位置
+  const p = car.lap * N + car.s;
+  if (Math.abs(p - car.stuckP) > 3) { car.stuckP = p; car.stuckT = 0; } else if (car.spin <= 0) car.stuckT += dt;
+  const wantsToGo = !car.isPlayer || AUTO || car.finished || ((state.autoGas || input.gas) && !input.brake);
+  if (car.airT > 4 || car.y > roadY(car.s) + 45 || (wantsToGo && car.stuckT > 5)) {
+    (state.rescueLog ||= []).push({ who: car.cfg.name, why: car.airT > 4 ? 'air' : car.stuckT > 5 ? 'stuck' : 'high', idx: car.idx, lat: +car.lat.toFixed(1), y: +car.y.toFixed(1) });
+    rescue(car);
+    return;
   }
   // 圈數判定
   if (car.idx > N * 0.4 && car.idx < N * 0.6) car.checkpoint = true;
@@ -1047,6 +1067,17 @@ function updateCar(car, dt, ctl) {
 
   const pitchT = Math.atan2(car.vy, Math.max(8, Math.abs(car.speed))) * (car.air ? 0.6 : 1);
   car.pitch = lerp(car.pitch, clamp(pitchT, -0.6, 0.6), 1 - Math.exp(-dt * 10));
+}
+
+function rescue(car) {
+  // 用「圈數＋位置」記安全點，跨過起跑線也不會算錯圈
+  const sp = car.safeP - 8;
+  car.lap = Math.floor(sp / N);
+  const idx = ((sp % N) + N) % N;
+  placeCar(car, idx, 0);
+  car.checkpoint = idx >= N * 0.4;
+  car.speed = 12; car.spin = 0; car.fallT = 0; car.invuln = 2;
+  if (car.isPlayer) showBanner('回到賽道上！', 1000);
 }
 
 function respawn(car) {
@@ -1699,7 +1730,7 @@ addEventListener('resize', () => {
 });
 
 // ================= 主迴圈 =================
-let last = performance.now(), titleAngle = 0;
+let last = performance.now(), titleAngle = 0, skipRender = false;
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000);
@@ -1768,6 +1799,7 @@ function tick(dt) {
   for (const car of state.cars) syncModel(car, state.mode === 'paused' ? 0 : dt);
   if (state.mode !== 'paused') updateEffects(dt);
   updateCamera(dt);
+  if (skipRender) return;
   renderer.render(scene, camera);
   drawMinimap();
 }
@@ -1826,7 +1858,9 @@ if (AUTO || params.has('debug')) {
       camPos.set(p.x - Math.sin(p.heading) * 9, p.y + 4, p.z - Math.cos(p.heading) * 9);
     },
     give(item) { state.player.item = item; },
+    input, surfaceY, canyonF, roadY,
     step(sec) { for (let k = 0; k < Math.round(sec * 60); k++) tick(1 / 60); },
+    fast(on) { skipRender = on; },
   };
 }
 
