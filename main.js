@@ -346,7 +346,22 @@ function buildKart(cfg) {
   lights.add(beam);
   lights.visible = false;
   body.add(lights);
-  kart.userData = { body, wheels, steers, flames, shield, dog, lights, head: driver.userData.head };
+  // 花生集滿時的金色光芒：發光罩＋繞圈的小星星
+  const gold = new THREE.Group();
+  gold.position.y = 1.3;
+  const glow = new THREE.Mesh(new THREE.SphereGeometry(2.6, 20, 14),
+    new THREE.MeshBasicMaterial({ color: '#ffd23f', transparent: true, opacity: 0.32, depthWrite: false, blending: THREE.AdditiveBlending }));
+  gold.add(glow);
+  const sparkM = new THREE.MeshBasicMaterial({ color: '#fff3a0' });
+  for (let k = 0; k < 10; k++) {
+    const sp = new THREE.Mesh(new THREE.OctahedronGeometry(0.22, 0), sparkM);
+    const a = k / 10 * Math.PI * 2;
+    sp.position.set(Math.cos(a) * 2.4, (k % 3 - 1) * 0.8, Math.sin(a) * 2.4);
+    gold.add(sp);
+  }
+  gold.visible = false;
+  kart.add(gold);
+  kart.userData = { body, wheels, steers, flames, shield, dog, lights, gold, head: driver.userData.head };
   return kart;
 }
 
@@ -1446,7 +1461,7 @@ function makeCar(ri, isPlayer) {
     lap: 0, checkpoint: true, peanuts: 0, boost: 0, finished: false, finishTime: 0, offroad: false, wheelSpin: 0,
     maxSpeed: (42 + s.speed * 2) * speedMul(), accel: (12 + s.accel * 3) * speedMul(), handling: 1.85 + s.handling * 0.13,
     s: 0, vy: 0, air: false, prevSy: 0, fallT: 0, spin: 0, invuln: 0, shield: 0, item: null, roll: 0,
-    big: 0, small: 0, dog: 0, scaleNow: 1,
+    big: 0, small: 0, dog: 0, scaleNow: 1, gold: 0,
     ai: { baseSkill: 1, skill: 1, phase: rand() * 6, bias: (rand() - 0.5) * 4, hold: 0 },
   };
 }
@@ -1507,6 +1522,7 @@ function updateCar(car, dt, ctl) {
     return;
   }
   car.big = Math.max(0, car.big - dt);
+  car.gold = Math.max(0, car.gold - dt);
   car.small = Math.max(0, car.small - dt);
   car.dog = Math.max(0, car.dog - dt);
   if (car.dog > 0) {
@@ -1853,8 +1869,7 @@ function useItem(car) {
     car.spin = 0;
     if (car.isPlayer) { Sound.bark(); showBanner('彭德衝衝衝！', 1200); }
   } else {
-    car.peanuts = Math.min(10, car.peanuts + 3);
-    if (car.isPlayer) Sound.ding();
+    addPeanuts(car, 3);
   }
 }
 
@@ -2260,13 +2275,40 @@ function updateBlunder(car, dt, allowed) {
   }
 }
 
+// 吃花生：每顆最高速度 +1.2%（最多 10 顆）；集滿 10 顆時金色衝刺
+function addPeanuts(car, n) {
+  const before = car.peanuts;
+  car.peanuts = Math.min(10, car.peanuts + n);
+  const got = car.peanuts - before;
+  if (car.isPlayer) {
+    Sound.ding();
+    peanutPop(got > 0 ? `🥜 +${got} 速度 UP！` : '🥜 花生已經滿了！');
+  }
+  if (before < 10 && car.peanuts === 10) {
+    car.gold = 3;
+    car.boost = Math.max(car.boost, 1.5);
+    car.speed += 8 * speedMul();
+    if (car.isPlayer) {
+      showBanner('🌟 花生集滿！金色衝刺！', 1500);
+      [784, 988, 1175, 1568].forEach((f, i) => Sound.tone(f, 0.22, 'triangle', 0.18, i * 0.07));
+    }
+  }
+}
+let popTimer = 0;
+function peanutPop(text) {
+  const el = $('peanutPop');
+  el.textContent = text;
+  el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
+  clearTimeout(popTimer);
+  popTimer = setTimeout(() => el.classList.remove('show'), 1000);
+}
+
 function checkPickups(car) {
   for (const pn of peanuts) {
     if (!pn.active || Math.abs(pn.y - 1.3 - car.y) > 4) continue;
     if ((pn.x - car.x) ** 2 + (pn.z - car.z) ** 2 < 5.5) {
       pn.active = false; pn.timer = 6; pn.mesh.visible = false;
-      car.peanuts = Math.min(10, car.peanuts + 1);
-      if (car.isPlayer) Sound.ding();
+      addPeanuts(car, 1);
     }
   }
   for (const pad of pads) {
@@ -2350,6 +2392,12 @@ function syncModel(car, dt) {
   for (const f of u.flames) {
     f.visible = car.boost > 0 || car.dog > 0;
     f.scale.set(1, 0.7 + Math.random() * 0.6, 1);
+  }
+  u.gold.visible = car.gold > 0;
+  if (car.gold > 0) {
+    u.gold.rotation.y += (dt || 0.016) * 4;
+    u.gold.children[0].material.opacity = 0.18 + 0.16 * (0.5 + 0.5 * Math.sin(time * 14)) * Math.min(1, car.gold);
+    u.gold.scale.setScalar(1 + Math.sin(time * 10) * 0.06);
   }
   // 變大／縮小（快結束時閃爍提醒）
   let target = car.big > 0 ? 1.7 : car.small > 0 ? 0.55 : 1;
