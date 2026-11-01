@@ -1314,6 +1314,13 @@ function aiControl(car, dt) {
     const d = idxAhead(car.idx, o.idx);
     if (d > 0 && d < 38 && Math.abs(o.lat - lane) < dodge) lane = clamp(o.lat + (lane >= o.lat ? 4.8 : -4.8), -HW + 1.5, HW - 1.5);
   }
+  // 追趕機制：玩家落到第 3、4 名時，跑在玩家前面的電腦會放慢、偶爾出包
+  const pl = state.player;
+  const trailing = pl && !car.isPlayer && !pl.finished && ranking().indexOf(pl) >= 2;
+  const ahead = pl ? progress(car) - progress(pl) : 0;
+  updateBlunder(car, dt, trailing && ahead > 15);
+  if (ai.blunderT > 0 && ai.blunder === 'grass') lane = ai.blunderSide * (HW + 8);
+
   const look = 10 + Math.floor(Math.max(0, car.speed) * 0.35);
   const ti = (car.idx + look) % N, p = pts[ti], s = SIDE[ti];
   const want = Math.atan2(p.x + s.x * lane - car.x, p.z + s.z * lane - car.z);
@@ -1321,13 +1328,40 @@ function aiControl(car, dt) {
   const t0 = TAN[car.idx], t1 = TAN[(car.idx + 32) % N];
   const bend = Math.acos(clamp(t0.x * t1.x + t0.z * t1.z, -1, 1));
   let gas = true, brake = false;
+  let steer = clamp(-diff * 2.8, -1, 1);
   if (bend > 0.75 && car.speed > car.maxSpeed * 0.78) gas = false;
   if (Math.abs(diff) > 1.0 && car.speed > 18) brake = true;
-  if (state.player && !car.isPlayer) {
-    const gap = (progress(car) - progress(state.player)) / N;
+  if (ai.blunderT > 0) {
+    if (ai.blunder === 'wobble') steer = clamp(steer + Math.sin(time * 7) * 1.1, -1, 1);   // 方向盤亂打
+    if (ai.blunder === 'daze') { gas = false; brake = ai.blunderT > 1.2; }                 // 發呆鬆油門
+  }
+  if (pl && !car.isPlayer) {
+    const gap = ahead / N;
     ai.skill = ai.baseSkill * clamp(1 - gap * 0.4, 0.86, 1.08);
+    if (trailing && ahead > 0) ai.skill *= 1 - clamp(gap, 0, 0.5) * [0.4, 0.3, 0.18][state.difficulty];
   } else ai.skill = 0.95;
-  return { steer: clamp(-diff * 2.8, -1, 1), gas, brake };
+  return { steer, gas, brake };
+}
+
+// 電腦出包：衝上草地、方向亂打、發呆、自己打滑轉圈
+function updateBlunder(car, dt, allowed) {
+  const ai = car.ai;
+  if (ai.blunderT > 0) { ai.blunderT -= dt; return; }
+  ai.cool = (ai.cool || 0) - dt;
+  if (!allowed || ai.cool > 0 || car.air || car.spin > 0 || car.fallT > 0) return;
+  if (Math.abs(idxAhead(GAP0, car.idx) - N / 2) > N / 2 - 70) return;   // 斷橋附近不出包，免得一直掉下去
+  if (state.cars.filter((c) => c.ai.blunderT > 0).length >= 2) return;
+  const rate = [0.45, 0.3, 0.16][state.difficulty];                    // 每秒出包機率
+  if (Math.random() > rate * dt) return;
+  ai.blunder = ['grass', 'grass', 'wobble', 'daze', 'spin'][Math.floor(Math.random() * 5)];
+  ai.blunderSide = Math.random() < 0.5 ? -1 : 1;
+  ai.blunderT = 1.8 + Math.random() * 1.4;
+  ai.cool = 5 + Math.random() * 4;
+  if (ai.blunder === 'spin') {
+    car.spin = SPIN_T;
+    car.speed *= 0.4;
+    ai.blunderT = SPIN_T;
+  }
 }
 
 function checkPickups(car) {
