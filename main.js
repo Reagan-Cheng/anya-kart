@@ -416,6 +416,7 @@ let TRACK = null, world = null, trackIndex = -1;
 let pts = [], TAN = [], SIDE = [], SPACING = 1, isDeck = [];
 let GAP = null, BRIDGE_I = -1, BC = null, BT = null, BS = null, GAP0 = -1, CANYON_Y = -24, GAP_HALF = 10;
 let CREST = 0, RAMPS = [], LAYOUT = {};
+let OFFROAD = 20;   // 可以開出路面多遠（之外是看不見的邊界）
 let hillFn = countryHill;
 
 function countryHill(x, z) {
@@ -472,6 +473,8 @@ function nearestIdx(x, z, step = 1, skipDeck = false) {
   return [best, Math.sqrt(bd)];
 }
 const headingAt = (i) => Math.atan2(TAN[i].x, TAN[i].z);
+// 佈景剛好壓在看不見的邊界上時，車子會被夾進去，所以這種位置不放東西
+const onBoundary = (d, r) => d + r > HW + OFFROAD - 0.5 && d - r < HW + OFFROAD + 1.8;
 const latPos = (i, lat) => [pts[i].x + SIDE[i].x * lat, pts[i].z + SIDE[i].z * lat];
 
 function loadTrack(k) {
@@ -497,6 +500,7 @@ function loadTrack(k) {
   }
   SPACING = curve.getLength() / N;
   hillFn = cfg.hill === 'snow' ? snowHill : cfg.flat ? cityHill : countryHill;
+  OFFROAD = cfg.offroad ?? 20;
   isDeck = pts.map((p) => cfg.deckAbove != null && p.y > cfg.deckAbove);
   GAP = cfg.gap || null;
   GAP0 = -1; BRIDGE_I = -1;
@@ -511,12 +515,13 @@ function loadTrack(k) {
   if (cfg.crest) { CREST = cfg.crest[0]; for (let i = cfg.crest[0]; i < cfg.crest[1]; i++) if (pts[i].y > pts[CREST].y) CREST = i; }
   const T = { N, near: (x, z) => nearestIdx(x, z)[0], GAP0, CREST, idxGap: (a, b) => (b - a + N) % N };
   LAYOUT = Object.assign({ ramps: [], pads: [], signs: [], boxes: [], obstacles: [], villains: [], peanuts: [], zones: [],
-    lasers: [], snowballs: [], dividers: [], tunnels: [], crosswalks: [], traffic: null }, cfg.layout(T));
+    lasers: [], snowballs: [], dividers: [], tunnels: [], crosswalks: [], ghosts: [], traffic: null }, cfg.layout(T));
   RAMPS = LAYOUT.ramps;
-  for (const a of [pads, peanuts, itemBoxes, obstacles, villains, bombs, smokes, effects, lasers, traffic, snowballs, scrollTex]) a.length = 0;
+  for (const a of [pads, peanuts, itemBoxes, obstacles, villains, bombs, smokes, effects, lasers, traffic, snowballs, scrollTex, solids, ghosts]) a.length = 0;
+  solidGrid.clear();
   snowfall = null;
   buildWorld();
-  if (cfg.decor) cfg.decor({ THREE, world, toon, mesh, canvasTex, rand, pts, TAN, SIDE, N, HW, nearestIdx, groundY, canyonF, gradTex });
+  if (cfg.decor) cfg.decor({ THREE, world, toon, mesh, canvasTex, rand, pts, TAN, SIDE, N, HW, nearestIdx, groundY, canyonF, gradTex, addSolid, onBoundary });
   initMinimap();
   for (const m of [...raceModels, ...previewModels]) m.userData.lights.visible = !!cfg.theme.night;
 }
@@ -600,7 +605,11 @@ function buildWorld() {
   arch.position.copy(p0);
   arch.rotation.y = h0;
   world.add(arch);
-  for (const s of [-1, 1]) mesh(new THREE.BoxGeometry(1.2, 9, 1.2), toon(th.arch.color), (HW + 2.4) * s, 4.5, 0, arch);
+  for (const s of [-1, 1]) {
+    mesh(new THREE.BoxGeometry(1.2, 9, 1.2), toon(th.arch.color), (HW + 2.4) * s, 4.5, 0, arch);
+    const [ax, az] = latPos(0, (HW + 2.4) * s);
+    addSolid({ x: ax, z: az, r: 0.9 });
+  }
   const bannerTex = canvasTex(1024, 128, (g, W, H) => {
     g.fillStyle = '#3d3638'; g.fillRect(0, 0, W, H);
     if (th.arch.neon) { g.shadowColor = th.arch.color; g.shadowBlur = 20; }
@@ -651,6 +660,7 @@ function buildWorld() {
   for (const l of LAYOUT.lasers) buildLaser(l);
   if (LAYOUT.traffic) buildTraffic(LAYOUT.traffic);
   for (const sb of LAYOUT.snowballs) buildSnowballs(sb);
+  for (const gd of LAYOUT.ghosts) buildGhosts(gd);
   if (th.snow) buildSnowfall();
 
   // 道具禮物盒
@@ -733,8 +743,10 @@ function buildTrees(cfg) {
   for (let tries = 0; trees.length < cfg.count && tries < cfg.count * 20; tries++) {
     const x = (rand() - 0.5) * 860, z = (rand() - 0.5) * 860;
     const [i, d] = nearestIdx(x, z, 4);
-    if (d < HW + 9 || Math.hypot(x, z) > 430 || canyonF(x, z) > 0.01) continue;
+    if (d < HW + 9 || Math.hypot(x, z) > 430 || canyonF(x, z) > 0.01 || onBoundary(d, 1.8)) continue;
     trees.push([x, groundY(x, z, i, d), z, 0.7 + rand() * 0.8, rand() < (cfg.pink || 0)]);
+    const t = trees[trees.length - 1];
+    if (d < HW + 30) addSolid({ x, z, y: t[1], r: (cfg.kind === 'pine' ? 1.7 : 1.2) * t[3] });
   }
   const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3();
   const place = (im, list) => list.forEach(([x, y, z, s], k) => {
@@ -772,12 +784,13 @@ function buildHouses(count) {
     const i = Math.floor(rand() * N), s = rand() < 0.5 ? -1 : 1, off = (HW + 18 + rand() * 14) * s;
     const [x, z] = latPos(i, off);
     const [ni, nd] = nearestIdx(x, z, 4);
-    if (nd < HW + 12 || canyonF(x, z) > 0.01) continue;
+    if (nd < HW + 12 || canyonF(x, z) > 0.01 || onBoundary(nd, 6)) continue;
     const hs = new THREE.Group();
     hs.position.set(x, groundY(x, z, ni, nd) - 0.3, z);
     hs.rotation.y = headingAt(i);
     world.add(hs);
     const w = 5 + rand() * 3;
+    addSolid({ x, z, hw: w / 2, hd: w / 2, rot: hs.rotation.y });
     mesh(new THREE.BoxGeometry(w, 4, w), toon(houseCols[k % 5]), 0, 2, 0, hs);
     mesh(new THREE.ConeGeometry(w * 0.8, 3, 4), toon('#e76f6f'), 0, 5.5, 0, hs).rotation.y = Math.PI / 4;
     mesh(new THREE.BoxGeometry(1.2, 2, 0.1), toon('#8a5a3c'), 0, 1, w / 2 + 0.02, hs);
@@ -895,7 +908,11 @@ function buildDecks() {
     for (const s of [-1, 1]) mesh(railGeo, railM, (HW + 1.6) * s, 0.55, SPACING, g);
     if (i % 12 === 0) {
       const [, d] = nearestIdx(p.x, p.z, 2, true);
-      if (d > HW + 2) for (const s of [-1, 1]) mesh(new THREE.CylinderGeometry(0.7, 0.9, p.y, 10), pillarM, (HW - 2) * s, -p.y / 2, SPACING, g);
+      if (d > HW + 2) for (const s of [-1, 1]) {
+        mesh(new THREE.CylinderGeometry(0.7, 0.9, p.y, 10), pillarM, (HW - 2) * s, -p.y / 2, SPACING, g);
+        const [px, pz] = latPos(i, (HW - 2) * s);
+        addSolid({ x: px + TAN[i].x * SPACING, z: pz + TAN[i].z * SPACING, y: -5, top: p.y + 4, r: 1.0 });
+      }
     }
   }
 }
@@ -941,6 +958,7 @@ function roadSign(i, line1, line2) {
     g.position.set(x, p.y, z);
     g.rotation.y = headingAt(i) + Math.PI;
     world.add(g);
+    addSolid({ x, z, y: p.y, r: 0.45 });
     mesh(new THREE.CylinderGeometry(0.2, 0.2, 4, 8), toon('#777777'), 0, 2, 0, g);
     mesh(new THREE.BoxGeometry(6, 3, 0.2), [toon('#3d3638'), toon('#3d3638'), toon('#3d3638'), toon('#3d3638'), faceM, toon('#3d3638')], 0, 5, 0, g);
   }
@@ -1070,6 +1088,8 @@ function buildLaser(l) {
   world.add(g);
   for (const s of [-1, 1]) {
     mesh(new THREE.BoxGeometry(0.8, 4, 0.8), toon('#39404d'), (HW + 1.2) * s, 2, 0, g);
+    const [lx, lz] = latPos(i, (HW + 1.2) * s);
+    addSolid({ x: lx, z: lz, y: p.y, r: 0.6 });
     const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 6), new THREE.MeshBasicMaterial({ color: '#ff3040' }));
     lamp.position.set((HW + 1.2) * s, 4.3, 0);
     g.add(lamp);
@@ -1117,6 +1137,60 @@ function buildSnowballs(cfg) {
   for (let k = 0; k < 3; k++) {
     const m = mesh(geo, toon('#ffffff'), 0, -50, 0, world);
     snowballs.push({ cfg, s: cfg.iTop, lat: 0, active: false, t: k * cfg.every, r: 2, mesh: m, x: 0, z: 0, y: 0, idx: cfg.iTop });
+  }
+}
+
+// 可愛幽靈：在路上左右飄，偶爾變透明（這時碰到沒事）
+function buildGhosts(gd) {
+  const cols = ['#ffffff', '#e6dcff', '#d8fff0'];
+  for (let k = 0; k < 2; k++) {
+    const g = new THREE.Group();
+    const col = cols[(ghosts.length) % cols.length];
+    const bodyM = new THREE.MeshToonMaterial({ color: col, gradientMap: gradTex, emissive: '#9fa8ff', emissiveIntensity: 0.45, transparent: true });
+    const body = new THREE.Mesh(new THREE.SphereGeometry(1.15, 20, 16), bodyM);
+    body.position.y = 0.4;
+    g.add(body);
+    const skirt = new THREE.Mesh(new THREE.CylinderGeometry(1.15, 1.3, 1.1, 20, 1, true), bodyM);
+    skirt.position.y = -0.15;
+    g.add(skirt);
+    // 波浪下襬
+    for (let a = 0; a < 8; a++) {
+      const th = a / 8 * Math.PI * 2;
+      const b = new THREE.Mesh(new THREE.SphereGeometry(0.34, 10, 8), bodyM);
+      b.position.set(Math.cos(th) * 1.05, -0.72, Math.sin(th) * 1.05);
+      g.add(b);
+    }
+    const arms = [];
+    for (const s of [-1, 1]) {
+      const arm = new THREE.Mesh(new THREE.SphereGeometry(0.32, 10, 8), bodyM);
+      arm.scale.set(0.8, 1.2, 0.8);
+      arm.position.set(1.15 * s, 0.25, 0.2);
+      g.add(arm);
+      arms.push(arm);
+    }
+    const faceM = new THREE.MeshBasicMaterial({ color: '#2b2140', transparent: true });
+    const hiM = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true });
+    const blushM = new THREE.MeshBasicMaterial({ color: '#ff9fbf', transparent: true });
+    for (const s of [-1, 1]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.17, 10, 8), faceM);
+      eye.scale.set(0.85, 1.25, 0.5);
+      eye.position.set(0.38 * s, 0.62, 1.03);
+      g.add(eye);
+      const hi = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), hiM);
+      hi.position.set(0.38 * s - 0.05, 0.72, 1.12);
+      g.add(hi);
+      const bl = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 8), blushM);
+      bl.scale.set(1.3, 0.7, 0.3);
+      bl.position.set(0.62 * s, 0.32, 0.95);
+      g.add(bl);
+    }
+    const mouth = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), faceM);
+    mouth.scale.set(1, 0.8, 0.4);
+    mouth.position.set(0, 0.28, 1.1);
+    g.add(mouth);
+    world.add(g);
+    ghosts.push({ i0: (gd.i + k * 14) % N, amp: gd.amp || 8, spd: gd.speed || 0.9, phase: k * Math.PI + ghosts.length,
+      mesh: g, arms, mats: [bodyM, faceM, hiM, blushM], x: 0, y: 0, z: 0, idx: gd.i, lat: 0, solid: true, scare: 0 });
   }
 }
 
@@ -1251,6 +1325,7 @@ const Sound = {
   fall() { this.tone(700, 1.1, 'sine', 0.18, 0, 90); },
   grow() { [262, 330, 392, 523].forEach((f, i) => this.tone(f, 0.25, 'square', 0.1, i * 0.08, f * 1.5)); },
   shrink() { this.tone(1400, 0.6, 'sine', 0.18, 0, 200); },
+  boo() { this.tone(660, 0.18, 'sine', 0.16, 0, 990); this.tone(880, 0.22, 'sine', 0.14, 0.15, 520); },
   bark() { this.tone(520, 0.12, 'square', 0.16, 0, 300); this.tone(560, 0.14, 'square', 0.16, 0.18, 320); },
   fanfare() { [523, 659, 784, 1046, 784, 1046].forEach((f, i) => this.tone(f, 0.32, 'triangle', 0.2, i * 0.14)); },
   setMuted(m) { this.muted = m; if (this.master) this.master.gain.value = m ? 0 : 0.5; },
@@ -1259,7 +1334,8 @@ const Sound = {
 // ================= 遊戲狀態 =================
 const sun = new THREE.DirectionalLight('#fff3e0', 2.4);
 const pads = [], peanuts = [], itemBoxes = [], obstacles = [], villains = [], bombs = [], smokes = [], effects = []
-const lasers = [], traffic = [], snowballs = [], scrollTex = [];
+const lasers = [], traffic = [], snowballs = [], scrollTex = [], solids = [], ghosts = [];
+const solidGrid = new Map();
 let snowfall = null;
 const hemi = new THREE.HemisphereLight('#ffffff', '#86b86a', 1.5);
 const state = { mode: 'loading', selected: 0, difficulty: 1, speedLevel: 0, track: 0, autoGas: true, cars: [], player: null, raceTime: 0, countdown: 0, lastCount: 0, resultTimer: -1, shake: 0 };
@@ -1413,10 +1489,11 @@ function updateCar(car, dt, ctl) {
   if (zone && zone.type === 'conveyor') { car.x += SIDE[car.idx].x * zone.push * dt; car.z += SIDE[car.idx].z * zone.push * dt; }
 
   car.prevIdx = car.idx;
+  const prevLat = car.lat;
   updateIdx(car);
   const inCanyon = canyonF(car.x, car.z) > 0.05;
   const railed = inCanyon || isDeck[car.idx];
-  const lim = railed ? HW + 1 : HW + 20;   // 橋上、高架橋上有欄杆
+  const lim = railed ? HW + 1 : HW + OFFROAD;   // 橋上、高架橋上有欄杆
   if (Math.abs(car.lat) > lim) {
     const s = SIDE[car.idx], L = Math.sign(car.lat) * lim;
     car.x -= s.x * (car.lat - L); car.z -= s.z * (car.lat - L); car.lat = L;
@@ -1436,6 +1513,25 @@ function updateCar(car, dt, ctl) {
     car.speed *= Math.pow(0.6, dt);
     if (car.isPlayer && Math.random() < dt * 4) Sound.bump();
   }
+  // 隧道牆：從裡面出不去、從外面也進不來
+  const kr = 1.3 * car.scaleNow;
+  for (const t of LAYOUT.tunnels) {
+    if (idxAhead(t.i0, car.idx) > t.len) continue;
+    const wall = tunnelWallLat(t);
+    for (const s of t.kind === 'cave' ? [t.side] : [-1, 1]) {
+      const l = car.lat * s;
+      if (l <= wall - kr || l >= wall + kr) continue;
+      const target = (prevLat * s <= wall ? wall - kr : wall + kr) * s;
+      const sv = SIDE[car.idx];
+      car.x -= sv.x * (car.lat - target); car.z -= sv.z * (car.lat - target); car.lat = target;
+      car.heading += wrapAngle(headingAt(car.idx) - car.heading) * Math.min(1, dt * 6);
+      car.vdir = car.heading;
+      car.speed *= Math.pow(0.5, dt);
+      if (car.isPlayer && Math.random() < dt * 4) Sound.bump();
+    }
+  }
+  // 路邊的樹、房子、大樓、雪人、柱子：撞到會被彈開
+  collideSolids(car, kr, dt);
 
   // 垂直：跳躍、飛行、落地
   let sy = surfaceY(car);
@@ -1503,6 +1599,64 @@ function rescue(car) {
   car.checkpoint = idx >= N * 0.4;
   car.speed = 12; car.spin = 0; car.fallT = 0; car.invuln = 2;
   if (car.isPlayer) showBanner('回到賽道上！', 1000);
+}
+
+// 隧道牆在路中心哪一側多遠（和 buildTunnel 的斷面一致）
+function tunnelWallLat(t) {
+  return t.kind === 'base' ? HW + 2 : t.kind === 'cave' ? 6.5 + 7.2 : HW + 3;
+}
+
+// ---------- 實體障礙物：圓形（樹、柱子）或方形（房子、大樓） ----------
+const SOLID_CELL = 16;
+function addSolid(s) {
+  const r = (s.r || Math.hypot(s.hw, s.hd)) + 2.5;
+  s.top = s.top ?? 99;
+  s.y = s.y ?? -99;
+  solids.push(s);
+  for (let cx = Math.floor((s.x - r) / SOLID_CELL); cx <= Math.floor((s.x + r) / SOLID_CELL); cx++) {
+    for (let cz = Math.floor((s.z - r) / SOLID_CELL); cz <= Math.floor((s.z + r) / SOLID_CELL); cz++) {
+      const key = cx * 10007 + cz;
+      if (!solidGrid.has(key)) solidGrid.set(key, []);
+      solidGrid.get(key).push(s);
+    }
+  }
+}
+function collideSolids(car, kr, dt) {
+  const list = solidGrid.get(Math.floor(car.x / SOLID_CELL) * 10007 + Math.floor(car.z / SOLID_CELL));
+  if (!list) return;
+  for (const s of list) {
+    if (car.y > s.y + s.top) continue;   // 從上面飛過去
+    let nx, nz, pen;
+    if (s.r) {
+      const dx = car.x - s.x, dz = car.z - s.z, d = Math.hypot(dx, dz);
+      if (d >= s.r + kr || d < 1e-4) continue;
+      nx = dx / d; nz = dz / d; pen = s.r + kr - d;
+    } else {
+      // 方形：轉到方塊自己的座標找最近點
+      const c = Math.cos(s.rot), sn = Math.sin(s.rot);
+      const dx = car.x - s.x, dz = car.z - s.z;
+      const lx = dx * c - dz * sn, lz = dx * sn + dz * c;
+      const qx = clamp(lx, -s.hw, s.hw), qz = clamp(lz, -s.hd, s.hd);
+      let ex = lx - qx, ez = lz - qz, d = Math.hypot(ex, ez);
+      if (d >= kr) continue;
+      if (d < 1e-4) {
+        // 車子中心跑進方塊裡：往最近的邊推出去
+        const px = s.hw - Math.abs(lx), pz = s.hd - Math.abs(lz);
+        if (px < pz) { ex = Math.sign(lx) || 1; ez = 0; pen = px + kr; } else { ex = 0; ez = Math.sign(lz) || 1; pen = pz + kr; }
+        d = 1;
+      } else pen = kr - d;
+      ex /= d; ez /= d;
+      nx = ex * c + ez * sn; nz = -ex * sn + ez * c;
+    }
+    car.x += nx * pen; car.z += nz * pen;
+    // 朝障礙物的速度分量被擋掉
+    const vx = Math.sin(car.vdir), vz = Math.cos(car.vdir), into = -(vx * nx + vz * nz);
+    if (into > 0.2) {
+      car.speed *= Math.pow(0.15, dt * 4 * into);
+      if (car.isPlayer && car.speed > 6 && Math.random() < dt * 6) { Sound.bump(); state.shake = Math.max(state.shake, 0.15); }
+    }
+    updateIdx(car);
+  }
 }
 
 function zoneAt(car) {
@@ -1795,6 +1949,32 @@ function updateMovingHazards(dt, cars) {
       if (!hit(c, '撞到車子了！轉圈圈～')) c.speed *= 0.9;
     }
   }
+  for (const gh of ghosts) {
+    const t = state.raceTime + gh.phase;
+    gh.scare = Math.max(0, gh.scare - dt);
+    const cyc = (t % 8) / 8;   // 一輪 8 秒：前 70% 實體，後 30% 透明
+    gh.solid = cyc < 0.7 && gh.scare <= 0;
+    const fade = gh.scare > 0 ? 0.3 : cyc < 0.66 ? 1 : cyc < 0.7 ? 1 - (cyc - 0.66) / 0.04 * 0.7 : cyc > 0.96 ? 0.3 + (cyc - 0.96) / 0.04 * 0.7 : 0.3;
+    gh.mats[0].opacity = 0.92 * fade;
+    for (let m = 1; m < gh.mats.length; m++) gh.mats[m].opacity = fade;
+    gh.lat = Math.sin(t * gh.spd) * gh.amp;
+    gh.idx = (gh.i0 + Math.round(Math.sin(t * 0.37) * 4) + N) % N;
+    const [x, z] = latPos(gh.idx, gh.lat);
+    gh.x = x; gh.z = z; gh.y = pts[gh.idx].y + 1.7 + Math.sin(t * 2.6) * 0.35;
+    gh.mesh.position.set(x, gh.y, z);
+    gh.mesh.rotation.y = headingAt(gh.idx) + Math.PI + (gh.scare > 0 ? gh.scare * 12 : Math.sin(t * 1.7) * 0.25);
+    gh.arms.forEach((a, k) => { a.position.y = 0.25 + Math.sin(t * 6 + k * Math.PI) * 0.18; });
+    if (!gh.solid) continue;
+    for (const c of cars) {
+      if (c.fallT > 0 || Math.abs(c.y + 1.2 - gh.y) > 3) continue;
+      if ((c.x - x) ** 2 + (c.z - z) ** 2 < (1.3 + 1.3 * c.scaleNow) ** 2) {
+        hit(c, '被幽靈嚇到了！轉圈圈～');
+        gh.scare = 2;
+        Sound.boo();
+        break;
+      }
+    }
+  }
   for (const b of snowballs) {
     const cfg = b.cfg;
     if (!b.active) {
@@ -1865,7 +2045,7 @@ function aiControl(car, dt) {
   // 閃避前方的路障、煙霧與壞人（不是每次都閃得掉）
   const dodge = state.difficulty === 0 ? 2.6 : 3.8;
   const hazards = [...obstacles.filter((o) => o.knocked <= 0), ...smokes, ...villains.filter((v) => v.state !== 'knocked'),
-    ...traffic, ...snowballs.filter((b) => b.active)];
+    ...traffic, ...snowballs.filter((b) => b.active), ...ghosts.filter((g) => g.solid)];
   for (const o of hazards) {
     const d = idxAhead(car.idx, o.idx);
     if (d > 0 && d < 38 && Math.abs(o.lat - lane) < dodge) lane = clamp(o.lat + (lane >= o.lat ? 4.8 : -4.8), -HW + 1.5, HW - 1.5);
@@ -2462,6 +2642,7 @@ if (AUTO || params.has('debug')) {
     state, villains, obstacles, bombs, smokes, lasers, traffic, snowballs,
     get GAP0() { return GAP0; },
     get pts() { return pts; },
+    solids,
     near: (x, z) => nearestIdx(x, z)[0],
     loadTrack(k) { loadTrack(k); state.track = k; setupGrid(state.selected); resetHazards(); },
     place(i, lat, sp) {
