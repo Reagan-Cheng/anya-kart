@@ -16,7 +16,8 @@ const LAPS = 3;      // 圈數
 const N = 1200;      // 賽道取樣點數
 const HW = 11;       // 賽道半寬
 const DIFF = [0.84, 0.93, 1.0];
-const SPEED_MUL = [1, 0.8, 0.65];   // 車速：標準／慢一點／更慢
+const SPEED_MUL = [1, 0.8, 0.65];
+const WIN_TEXT = '安妮亞，哇庫哇庫！';   // 拿第一名時固定顯示這句   // 車速：標準／慢一點／更慢
 // 測試用網址參數：?auto=1 自動駕駛、?ts=4 四倍速
 const params = new URLSearchParams(location.search);
 const AUTO = params.has('auto'), TS = clamp(+params.get('ts') || 1, 1, 8);
@@ -194,7 +195,20 @@ function buildKart(cfg) {
   }
   gold.visible = false;
   kart.add(gold);
-  kart.userData = { body, wheels, steers, flames, shield, dog, lights, gold, head: driver.userData.head };
+  // 大斷橋撐的粉紅雨傘
+  const umbrella = new THREE.Group();
+  umbrella.position.set(0.3, 3.0, -0.1);
+  const umbTex = canvasTex(256, 32, (c, W, H) => { for (let k = 0; k < 8; k++) { c.fillStyle = k % 2 ? '#ffffff' : '#ff8fb1'; c.fillRect(k * W / 8, 0, W / 8, H); } });
+  const canopy = new THREE.Mesh(new THREE.SphereGeometry(2.4, 16, 8, 0, Math.PI * 2, 0, Math.PI * 0.42),
+    new THREE.MeshToonMaterial({ map: umbTex, gradientMap: gradTex, side: THREE.DoubleSide }));
+  canopy.scale.y = 0.7;
+  canopy.position.y = 1.0;
+  umbrella.add(canopy);
+  mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.4, 6), toon('#8a5a3c'), 0, 0.2, 0, umbrella);
+  mesh(new THREE.SphereGeometry(0.15, 8, 6), toon('#ff8fb1'), 0, 2.75, 0, umbrella);
+  umbrella.visible = false;
+  body.add(umbrella);
+  kart.userData = { body, wheels, steers, flames, shield, dog, lights, gold, umbrella, head: driver.userData.head };
   return kart;
 }
 
@@ -261,7 +275,8 @@ function nameTag(cfg) {
 // ================= 賽道 =================
 // 每條賽道的路線、配色與機關寫在 tracks.js；這裡負責把賽道建出來，並提供高度、位置等查詢
 let TRACK = null, world = null, trackIndex = -1;
-let pts = [], TAN = [], SIDE = [], SPACING = 1, isDeck = [];
+let pts = [], TAN = [], SIDE = [], SPACING = 1, isDeck = [], isBroken = [];
+let EDGE = -1, BROKEN_END = -1;   // 大斷橋：斷口位置與斷掉路段的結尾
 let GAP = null, BRIDGE_I = -1, BC = null, BT = null, BS = null, GAP0 = -1, CANYON_Y = -24, GAP_HALF = 10;
 let CREST = 0, RAMPS = [], LAYOUT = {};
 let OFFROAD = 20;   // 可以開出路面多遠（之外是看不見的邊界）
@@ -303,6 +318,7 @@ function groundY(x, z, i, dist) {
 // 車子/物體腳下的高度（含跳台、高架橋、橋面、峽谷）
 function surfaceY(o) {
   const al = Math.abs(o.lat), ry = roadY(o.s);
+  if (isBroken[o.idx]) { const [gi, gd] = nearestIdx(o.x, o.z, 2, true); return groundY(o.x, o.z, gi, gd); }
   if (isDeck[o.idx]) {
     // 在橋面上：有欄杆不會掉下去；在橋下：用下面地面的高度
     if (o.under) { const [gi, gd] = nearestIdx(o.x, o.z, 2, true); return groundY(o.x, o.z, gi, gd); }
@@ -318,7 +334,7 @@ function surfaceY(o) {
 function nearestIdx(x, z, step = 1, skipDeck = false) {
   let best = 0, bd = Infinity;
   for (let i = 0; i < N; i += step) {
-    if (skipDeck && isDeck[i]) continue;
+    if (skipDeck && (isDeck[i] || isBroken[i])) continue;
     const d = (pts[i].x - x) ** 2 + (pts[i].z - z) ** 2;
     if (d < bd) { bd = d; best = i; }
   }
@@ -355,6 +371,16 @@ function loadTrack(k) {
   hillFn = cfg.hill === 'snow' ? snowHill : cfg.flat ? cityHill : countryHill;
   OFFROAD = cfg.offroad ?? 20;
   isDeck = pts.map((p) => cfg.deckAbove != null && p.y > cfg.deckAbove);
+  isBroken = pts.map(() => false);
+  EDGE = -1; BROKEN_END = -1;
+  if (cfg.broken) {
+    // 斷口 = 那附近最高的點；斷口之後一路往下、還高於地面的路段都是斷掉的（沒有路面）
+    let e = nearestIdx(cfg.broken.x, cfg.broken.z)[0];
+    for (let k = -40; k <= 40; k++) { const i = (e + k + N) % N; if (pts[i].y > pts[e].y) e = i; }
+    EDGE = e;
+    let i = (e + 1) % N;
+    while (pts[i].y > (cfg.deckAbove ?? 3.2)) { isBroken[i] = true; isDeck[i] = false; BROKEN_END = i; i = (i + 1) % N; }
+  }
   GAP = cfg.gap || null;
   GAP0 = -1; BRIDGE_I = -1;
   if (GAP) {
@@ -366,7 +392,7 @@ function loadTrack(k) {
   }
   CREST = 0;
   if (cfg.crest) { CREST = cfg.crest[0]; for (let i = cfg.crest[0]; i < cfg.crest[1]; i++) if (pts[i].y > pts[CREST].y) CREST = i; }
-  const T = { N, near: (x, z) => nearestIdx(x, z)[0], GAP0, CREST, idxGap: (a, b) => (b - a + N) % N };
+  const T = { N, near: (x, z) => nearestIdx(x, z)[0], GAP0, CREST, EDGE, idxGap: (a, b) => (b - a + N) % N };
   LAYOUT = Object.assign({ ramps: [], pads: [], signs: [], boxes: [], obstacles: [], villains: [], peanuts: [], zones: [],
     lasers: [], snowballs: [], dividers: [], tunnels: [], crosswalks: [], ghosts: [], penguins: [], traffic: null }, cfg.layout(T));
   RAMPS = LAYOUT.ramps;
@@ -405,7 +431,7 @@ function buildWorld() {
     let [i, d] = nearestIdx(x, z, 3, true);
     for (let k = -3; k <= 3; k++) {
       const j = (i + k + N) % N;
-      if (isDeck[j]) continue;
+      if (isDeck[j] || isBroken[j]) continue;
       const dd = Math.hypot(pts[j].x - x, pts[j].z - z);
       if (dd < d) { d = dd; i = j; }
     }
@@ -501,6 +527,7 @@ function buildWorld() {
 
   if (GAP) buildBridge();
   buildDecks();
+  if (EDGE >= 0) buildBrokenEdge();
   for (const r of RAMPS) world.add(rampMesh(r));
   for (const [i, a, b] of LAYOUT.signs) roadSign((i + N) % N, a, b);
   for (const t of LAYOUT.tunnels) buildTunnel(t);
@@ -682,7 +709,8 @@ function ribbonRange(i0, len, off0, off1, yOff, vScale, skipGap = false) {
     if (k > 0) dist += SPACING;
     pos.push(p.x + s.x * off0, p.y + yOff, p.z + s.z * off0, p.x + s.x * off1, p.y + yOff, p.z + s.z * off1);
     uv.push(0, dist / vScale, 1, dist / vScale);
-    if (k < len && !(skipGap && (inGap(i) || inGap((i + 1) % N)))) { const a = k * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
+    const j = (i + 1) % N;
+    if (k < len && !(skipGap && (inGap(i) || inGap(j) || isBroken[i] || isBroken[j]))) { const a = k * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -745,6 +773,30 @@ function buildBridge() {
     }
   }
   world.add(wg);
+}
+
+// 大斷橋的斷口：碎裂的橋板、掉下來的鋼筋、警示燈
+function buildBrokenEdge() {
+  const dc = TRACK.theme.deck, p = pts[EDGE];
+  const g = new THREE.Group();
+  g.position.copy(p);
+  g.rotation.y = headingAt(EDGE);
+  world.add(g);
+  for (const x of [-8, -3, 2, 7]) {
+    const b = mesh(new THREE.BoxGeometry(4 + rand() * 2, 0.5, 2.6), toon(dc.deck), x + rand() * 1.5, -1.6 - rand(), 2.2, g);
+    b.rotation.x = 0.8 + rand() * 0.4;
+    b.rotation.z = (rand() - 0.5) * 0.6;
+  }
+  for (let k = 0; k < 6; k++) {
+    const r = mesh(new THREE.CylinderGeometry(0.08, 0.08, 3 + rand() * 2, 5), toon('#9a6a3a'), (rand() - 0.5) * 20, -1.5, 1.8, g);
+    r.rotation.x = 1.0 + rand() * 0.6;
+  }
+  const lampM = new THREE.MeshBasicMaterial({ color: '#ff8a1f' });
+  for (const s of [-1, 1]) {
+    const l = new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 8), lampM);
+    l.position.set((HW + 1.6) * s, 1.6, 0);
+    g.add(l);
+  }
 }
 
 // 高架橋：橋面、欄杆、橋墩
@@ -1270,7 +1322,8 @@ const input = { left: false, right: false, gas: false, brake: false };
 const G = 36;          // 重力
 const SPIN_T = 1.3;    // 轉圈圈秒數
 const KART_R = 1.6;    // 車子半寬（含後輪），撞牆時用
-const MAX_UP_V = 22;   // 在地面時最大往上速度（跳台起飛約 12～18）
+const MAX_UP_V = 22;
+const GLIDE_G = 12, GLIDE_FALL = 12;   // 大斷橋撐傘：重力與最大下降速度   // 在地面時最大往上速度（跳台起飛約 12～18）
 const ITEMS = {
   rocket: { icon: '🚀', name: '火箭衝刺', w: [1, 3, 5, 6] },
   bomb: { icon: '💣', name: '花生炸彈', w: [2, 4, 4, 4] },
@@ -1307,7 +1360,7 @@ function placeCar(car, idx, lat) {
   car.heading = Math.atan2(TAN[idx].x, TAN[idx].z);
   car.under = false; car.onDeck = isDeck[idx];
   car.y = car.prevSy = surfaceY(car);
-  car.vy = 0; car.air = false; car.airT = 0;
+  car.vy = 0; car.air = false; car.airT = 0; car.glide = false;
   car.vdir = car.heading; car.slip = 0;
   car.safeP = car.stuckP = car.lap * N + idx;
   car.stuckT = 0;
@@ -1393,6 +1446,8 @@ function updateCar(car, dt, ctl) {
     const th = Math.atan2(TAN[car.idx].x, TAN[car.idx].z);
     car.heading += wrapAngle(th - car.heading) * Math.min(1, dt * 3);
     if (Math.abs(car.lat) > HW - 3) car.heading -= Math.sign(car.lat) * dt * 0.25;
+    // 撐傘飄落時間很長：一路慢慢往路面中間飄，才會降落在路上
+    if (car.glide) car.heading -= clamp(car.lat / HW, -1.2, 1.2) * dt * 0.9;
   }
   // 地面區域：冰面會滑、輸送帶往旁邊推、水窪打滑
   const zone = car.air ? null : zoneAt(car);
@@ -1496,12 +1551,16 @@ function updateCar(car, dt, ctl) {
   // 一格內地面突然高很多（台階、土堤邊緣）：直接站上去，不要被彈起來；跳台是慢慢變高，不會走到這裡
   if (rawGv > 30 && !car.air) gv = 0;
   if (car.air) {
-    car.vy = Math.max(car.vy - G * dt, -60);
+    if (!car.glide && (isBroken[car.idx] || (EDGE >= 0 && idxAhead((EDGE - 1 + N) % N, car.idx) < 10))) {
+      car.glide = true;
+      if (car.isPlayer) { showBanner('☂️ 斷橋！撐傘飛下去～', 1600); Sound.tone(523, 0.3, 'sine', 0.15, 0, 1046); }
+    }
+    car.vy = car.glide ? Math.max(car.vy - GLIDE_G * dt, -GLIDE_FALL) : Math.max(car.vy - G * dt, -60);
     car.y += car.vy * dt;
     car.airT += dt;
     if (car.y <= sy) {
       if (car.isPlayer && car.vy < -12) { Sound.land(); state.shake = Math.min(0.5, -car.vy * 0.02); }
-      car.y = sy; car.vy = gv; car.air = false; car.airT = 0;
+      car.y = sy; car.vy = gv; car.air = false; car.airT = 0; car.glide = false;
     }
   } else if (gv < car.vy - G * dt - 0.6) {
     car.air = true;
@@ -1521,12 +1580,12 @@ function updateCar(car, dt, ctl) {
     return;
   }
   // 記住最近一次安全的位置（在路面上、沒在飛、不在峽谷）
-  if (!car.air && Math.abs(car.lat) < HW && canyonF(car.x, car.z) < 0.02) car.safeP = car.lap * N + car.idx;
+  if (!car.air && Math.abs(car.lat) < HW && canyonF(car.x, car.z) < 0.02 && !isBroken[car.idx]) car.safeP = car.lap * N + car.idx;
   // 保險：飛太久、飛太高、或卡住不動太久，就回到安全位置
   const p = car.lap * N + car.s;
   if (Math.abs(p - car.stuckP) > 3) { car.stuckP = p; car.stuckT = 0; } else if (car.spin <= 0) car.stuckT += dt;
   const wantsToGo = !car.isPlayer || AUTO || car.finished || ((state.autoGas || input.gas) && !input.brake);
-  if (car.airT > 4 || car.y > roadY(car.s) + 45 || (wantsToGo && car.stuckT > 5)) {
+  if (car.airT > (car.glide ? 10 : 4) || car.y > roadY(car.s) + 45 || (wantsToGo && car.stuckT > 5)) {
     (state.rescueLog ||= []).push({ who: car.cfg.name, why: car.airT > 4 ? 'air' : car.stuckT > 5 ? 'stuck' : 'high', idx: car.idx, lat: +car.lat.toFixed(1), y: +car.y.toFixed(1) });
     rescue(car);
     return;
@@ -1887,6 +1946,7 @@ function updateMovingHazards(dt, cars) {
   for (const v of traffic) {
     v.s = (v.s + v.speed * dt / SPACING) % N;
     v.idx = Math.floor(v.s);
+    if (isBroken[v.idx] || v.idx === EDGE) { v.s = (BROKEN_END + 2) % N; v.idx = Math.floor(v.s); }
     const [x, z] = latPos(v.idx, v.lat);
     v.x = x; v.z = z; v.y = roadY(v.s);
     v.mesh.position.set(x, v.y, z);
@@ -2189,7 +2249,7 @@ function onLap(car) {
       state.mode = 'finished';
       state.resultTimer = 2.5;
       const rank = ranking().indexOf(car) + 1;
-      showBanner(rank === 1 ? '第一名！哇庫哇庫！' : '抵達終點！', 2400);
+      showBanner(rank === 1 ? WIN_TEXT : '抵達終點！', 2400);
       Sound.fanfare();
       $('controls').classList.add('hidden');
     }
@@ -2226,6 +2286,8 @@ function syncModel(car, dt) {
     f.visible = car.boost > 0 || car.dog > 0;
     f.scale.set(1, 0.7 + Math.random() * 0.6, 1);
   }
+  u.umbrella.visible = !!car.glide;
+  if (car.glide) { u.umbrella.rotation.y += (dt || 0.016) * 2; u.umbrella.rotation.z = Math.sin(time * 3) * 0.12; }
   u.gold.visible = car.gold > 0;
   if (car.gold > 0) {
     u.gold.rotation.y += (dt || 0.016) * 4;
@@ -2401,7 +2463,7 @@ function showResults() {
     list.appendChild(li);
   });
   const r = rk.indexOf(state.player) + 1;
-  $('resultTitle').textContent = `${TRACK.icon} ${r === 1 ? '冠軍！太厲害了！' : `第 ${r} 名！再接再厲`}`;
+  $('resultTitle').textContent = r === 1 ? `🏆 ${WIN_TEXT}` : `${TRACK.icon} 第 ${r} 名！再接再厲`;
   $('result').classList.remove('hidden');
 }
 
@@ -2669,6 +2731,8 @@ if (AUTO || params.has('debug')) {
   window.__dbg = {
     state, villains, obstacles, bombs, smokes, lasers, traffic, snowballs,
     get GAP0() { return GAP0; },
+    get EDGE() { return EDGE; },
+    get BROKEN_END() { return BROKEN_END; },
     get pts() { return pts; },
     solids, ghosts, penguins,
     near: (x, z) => nearestIdx(x, z)[0],
