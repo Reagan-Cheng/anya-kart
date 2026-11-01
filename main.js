@@ -1,5 +1,6 @@
 import * as THREE from './lib/three.module.min.js';
 import { TRACKS } from './tracks.js';
+import { createAnyaBuilder } from './anya-model.js?v=1.8';
 
 // ================= 小工具 =================
 const $ = (id) => document.getElementById(id);
@@ -79,175 +80,7 @@ function drawStar(g, cx, cy, R, r) {
 }
 
 // ================= 安妮亞 3D 模型 =================
-function faceTexture(type) {
-  return canvasTex(768, 500, (g, W) => {
-    const ex = [W / 2 - 125, W / 2 + 125], ey = 238;
-    g.lineCap = 'round'; g.lineJoin = 'round';
-    if (type === 'shock') {
-      const gr = g.createLinearGradient(0, 40, 0, 340);
-      gr.addColorStop(0, 'rgba(80,80,130,0.6)'); gr.addColorStop(1, 'rgba(80,80,130,0)');
-      g.fillStyle = gr; g.fillRect(W / 2 - 280, 40, 560, 300);
-    }
-    // 腮紅
-    g.fillStyle = 'rgba(255,130,130,0.5)';
-    for (const x of [W / 2 - 200, W / 2 + 200]) { g.beginPath(); g.ellipse(x, 335, 44, 22, 0, 0, Math.PI * 2); g.fill(); }
-    // 眼睛
-    for (const x of ex) {
-      const side = x < W / 2 ? -1 : 1;
-      if (type === 'sleepy') {
-        g.strokeStyle = '#2b1d1d'; g.lineWidth = 13;
-        g.beginPath(); g.arc(x, ey + 40, 56, Math.PI * 1.15, Math.PI * 1.85); g.stroke();
-        g.lineWidth = 6; g.beginPath(); g.moveTo(x + 50 * side, ey + 18); g.lineTo(x + 70 * side, ey + 8); g.stroke();
-      } else if (type === 'shock') {
-        g.fillStyle = '#fff'; g.strokeStyle = '#2b1d1d'; g.lineWidth = 9;
-        g.beginPath(); g.ellipse(x, ey, 62, 72, 0, 0, Math.PI * 2); g.fill(); g.stroke();
-        g.fillStyle = '#183528'; g.beginPath(); g.arc(x, ey + 4, 12, 0, Math.PI * 2); g.fill();
-        g.lineWidth = 5; g.beginPath(); g.moveTo(x - 40, ey + 95); g.lineTo(x + 40, ey + 92); g.stroke();
-      } else {
-        g.fillStyle = '#fff'; g.beginPath(); g.ellipse(x, ey, 58, 70, 0, 0, Math.PI * 2); g.fill();
-        const ir = g.createLinearGradient(0, ey - 60, 0, ey + 64);
-        ir.addColorStop(0, '#0b4f3b'); ir.addColorStop(0.55, '#1c9e76'); ir.addColorStop(1, '#8be6c0');
-        g.fillStyle = ir; g.beginPath(); g.ellipse(x, ey + 5, 46, 60, 0, 0, Math.PI * 2); g.fill();
-        g.strokeStyle = '#0b3a2b'; g.lineWidth = 4; g.stroke();
-        g.fillStyle = '#fff'; drawStar(g, x, ey + 8, 22, 9);
-        g.beginPath(); g.arc(x - 24 * -side, ey - 30, 9, 0, Math.PI * 2); g.fill();
-        g.strokeStyle = '#2b1d1d'; g.lineWidth = 13;
-        g.beginPath(); g.ellipse(x, ey + 2, 63, 75, 0, Math.PI * 1.1, Math.PI * 1.9); g.stroke();
-        g.lineWidth = 7; g.beginPath(); g.moveTo(x + 56 * side, ey - 30); g.lineTo(x + 78 * side, ey - 46); g.stroke();
-      }
-    }
-    // 嘴巴
-    const mx = W / 2;
-    g.strokeStyle = '#3a1a1a'; g.lineWidth = 6;
-    if (type === 'happy') {
-      g.fillStyle = '#9b2f3a';
-      g.beginPath(); g.moveTo(mx - 48, 360); g.lineTo(mx + 48, 360); g.ellipse(mx, 360, 48, 46, 0, 0, Math.PI); g.closePath(); g.fill(); g.stroke();
-      g.fillStyle = '#ff8c95'; g.beginPath(); g.ellipse(mx, 392, 26, 13, 0, 0, Math.PI * 2); g.fill();
-      g.fillStyle = '#fff'; g.fillRect(mx - 40, 362, 80, 10);
-    } else if (type === 'sleepy') {
-      g.beginPath(); g.arc(mx, 335, 30, Math.PI * 0.2, Math.PI * 0.8); g.stroke();
-    } else if (type === 'shock') {
-      g.fillStyle = '#9b2f3a';
-      g.beginPath(); g.roundRect(mx - 48, 345, 96, 100, 22); g.fill(); g.stroke();
-      g.fillStyle = '#fff'; g.fillRect(mx - 40, 350, 80, 12);
-      g.fillStyle = '#9fdcff';
-      for (const [sx, sy] of [[mx + 250, 250], [mx - 255, 300]]) {
-        g.beginPath(); g.moveTo(sx, sy - 26); g.quadraticCurveTo(sx + 16, sy, sx, sy + 12); g.quadraticCurveTo(sx - 16, sy, sx, sy - 26); g.fill();
-      }
-    } else {
-      g.fillStyle = '#9b2f3a'; g.beginPath(); g.ellipse(mx, 372, 17, 22, 0, 0, Math.PI * 2); g.fill(); g.stroke();
-    }
-  });
-}
-
-function starTexture() {
-  const t = canvasTex(256, 256, (g, W, H) => {
-    g.fillStyle = '#76c7c9'; g.fillRect(0, 0, W, H);
-    g.fillStyle = '#ffffff';
-    for (const [x, y, r] of [[40, 50, 26], [150, 30, 22], [220, 120, 26], [90, 150, 28], [190, 220, 22], [30, 220, 20]]) drawStar(g, x, y, r, r * 0.45);
-  });
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(3, 1);
-  return t;
-}
-
-function buildAnya(cfg) {
-  const root = new THREE.Group();
-  const HAIR = '#f4a3a0', SKIN = '#ffe6d8', BLACK = '#3d3638';
-  const top = cfg.outfit === 'dress' ? BLACK : cfg.outfit === 'pajama' ? '#7ccbcc' : '#7fd3c6';
-  const bottom = cfg.outfit === 'dress' ? BLACK : cfg.outfit === 'pajama' ? '#7ccbcc' : '#ffe066';
-
-  // 坐姿雙腿
-  for (const sx of [-0.17, 0.17]) {
-    const leg = mesh(new THREE.CapsuleGeometry(0.12, 0.42, 4, 8), toon(cfg.outfit === 'sport' ? SKIN : bottom), sx, 0.45, 0.38, root);
-    leg.rotation.x = Math.PI / 2;
-  }
-  mesh(new THREE.CylinderGeometry(0.36, 0.47, 0.34, 16), toon(bottom), 0, 0.52, 0, root);
-  mesh(new THREE.CylinderGeometry(0.27, 0.36, 0.56, 16), toon(top), 0, 0.9, 0, root);
-  if (cfg.outfit === 'dress') {
-    mesh(new THREE.TorusGeometry(0.2, 0.05, 6, 16), toon('#f0a0a0'), 0, 1.15, 0.02, root).rotation.x = Math.PI / 2;
-    for (const s of [-1, 1]) {
-      const r = mesh(new THREE.ConeGeometry(0.06, 0.16, 4), toon('#ffffff'), 0.06 * s, 1.08, 0.27, root);
-      r.rotation.z = Math.PI / 2 * s;
-    }
-  } else if (cfg.outfit === 'pajama') {
-    for (let i = 0; i < 3; i++) mesh(new THREE.SphereGeometry(0.03, 6, 6), toon('#ffffff'), 0, 1.08 - i * 0.14, 0.31 + i * 0.02, root);
-  }
-  // 雙手握方向盤
-  for (const s of [-1, 1]) {
-    const sh = new THREE.Vector3(0.32 * s, 1.07, 0.02);
-    const hand = new THREE.Vector3(0.24 * s, 0.78, 0.66);
-    const dir = hand.clone().sub(sh);
-    const len = dir.length();
-    dir.normalize();
-    const ag = new THREE.CylinderGeometry(0.1, 0.085, len, 10);
-    ag.translate(0, len / 2, 0);
-    const arm = mesh(ag, toon(cfg.outfit === 'sport' ? SKIN : top), sh.x, sh.y, sh.z, root);
-    arm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-    if (cfg.outfit === 'sport') mesh(new THREE.SphereGeometry(0.14, 10, 8), toon(top), sh.x, sh.y, sh.z, root);
-    mesh(new THREE.SphereGeometry(0.1, 10, 8), toon(SKIN), hand.x, hand.y, hand.z, root);
-  }
-
-  // 頭
-  const head = new THREE.Group();
-  head.position.set(0, 1.62, 0.02);
-  root.add(head);
-  const skull = new THREE.Group();
-  skull.scale.set(1, 0.94, 0.96);
-  head.add(skull);
-  mesh(new THREE.SphereGeometry(0.55, 32, 24), toon(SKIN), 0, 0, 0, skull);
-  const FL = Math.PI * 0.7;
-  const face = new THREE.Mesh(
-    new THREE.SphereGeometry(0.556, 32, 16, Math.PI / 2 - FL / 2, FL, Math.PI * 0.3, Math.PI * 0.45),
-    new THREE.MeshToonMaterial({ map: faceTexture(cfg.face), gradientMap: gradTex, transparent: true, depthWrite: false }));
-  skull.add(face);
-
-  const hairM = toon(HAIR, { side: THREE.DoubleSide });
-  mesh(new THREE.SphereGeometry(0.6, 32, 16, 0, Math.PI * 2, 0, Math.PI * 0.4), hairM, 0, 0, 0, skull);
-  const back = mesh(new THREE.SphereGeometry(0.61, 32, 20, Math.PI * 0.9, Math.PI * 1.2, 0, Math.PI * 0.8), hairM, 0, 0, 0, skull);
-  back.scale.set(1.08, 1, 1.05);
-  // 瀏海
-  for (const a of [-0.78, -0.47, -0.16, 0.16, 0.47, 0.78]) {
-    const bg = new THREE.Group();
-    bg.rotation.y = a;
-    skull.add(bg);
-    const b = mesh(new THREE.ConeGeometry(0.15, 0.4, 8), hairM, 0, 0.25, 0.555, bg);
-    b.rotation.x = Math.PI - 0.32;
-    b.scale.z = 0.45;
-  }
-  // 兩側長髮
-  for (const s of [-1, 1]) {
-    const lock = mesh(new THREE.CapsuleGeometry(0.11, 0.42, 4, 8), hairM, 0.5 * s, -0.2, 0.16, skull);
-    lock.rotation.z = 0.12 * s;
-  }
-  if (!cfg.hat) {
-    // 呆毛
-    const ah = mesh(new THREE.ConeGeometry(0.05, 0.28, 6), hairM, 0.04, 0.66, 0.08, skull);
-    ah.rotation.z = -0.5;
-    // 招牌黑色髮飾
-    for (const s of [-1, 1]) {
-      const hg = new THREE.Group();
-      hg.position.set(0.37 * s, 0.43, -0.02);
-      hg.rotation.z = -0.55 * s;
-      skull.add(hg);
-      mesh(new THREE.ConeGeometry(0.16, 0.34, 4), toon('#2e2627'), 0, 0.12, 0, hg).rotation.y = Math.PI / 4;
-      mesh(new THREE.CylinderGeometry(0.165, 0.165, 0.07, 4), toon('#c9a64a'), 0, -0.06, 0, hg).rotation.y = Math.PI / 4;
-    }
-  }
-  if (cfg.bun) mesh(new THREE.SphereGeometry(0.21, 14, 12), hairM, 0.32, 0.28, -0.4, skull);
-  if (cfg.hat) {
-    const hatM = toon('#ffffff', { map: starTexture() });
-    const hg = new THREE.Group();
-    hg.position.set(0, 0.34, -0.03);
-    hg.rotation.set(-0.12, 0, -0.32);
-    skull.add(hg);
-    mesh(new THREE.CylinderGeometry(0.645, 0.66, 0.22, 24), hatM, 0, 0, 0, hg);
-    mesh(new THREE.ConeGeometry(0.63, 0.95, 24), hatM, 0, 0.58, 0, hg);
-    mesh(new THREE.SphereGeometry(0.15, 12, 10), toon('#ffffff'), 0, 1.05, 0, hg);
-  }
-  root.userData.head = head;
-  return root;
-}
+const buildAnya = createAnyaBuilder({ THREE, toon, mesh, canvasTex, drawStar });
 
 function buildPlush() {
   const g = new THREE.Group();
@@ -1219,7 +1052,7 @@ function buildGhosts(gd) {
   }
 }
 
-// 藍色企鵝：戴藍綠色軟帽，在路上搖搖擺擺走來走去，撞到會暈倒
+// 童童（藍色企鵝）：戴藍綠色軟帽，在路上搖搖擺擺走來走去，撞到會暈倒
 function buildPenguin() {
   const g = new THREE.Group();
   const blue = toon('#a9d0e2'), hatM = toon('#4f949e'), beige = toon('#f0d6a4'), black = toon('#1d2430');
@@ -2128,7 +1961,7 @@ function updateMovingHazards(dt, cars) {
     for (const c of cars) {
       if (c.fallT > 0 || c.air || Math.abs(c.y - pg.y) > 2.5) continue;
       if ((c.x - x) ** 2 + (c.z - z) ** 2 < (0.95 + 1.15 * c.scaleNow) ** 2) {
-        hit(c, '撞到企鵝了！暈頭轉向～');
+        hit(c, '撞到童童了！暈頭轉向～');
         pg.dizzy = 2.5; pg.vy = 9; pg.hop = 0.01; pg.wave = 0;
         Sound.squeak();
         break;
