@@ -515,9 +515,9 @@ function loadTrack(k) {
   if (cfg.crest) { CREST = cfg.crest[0]; for (let i = cfg.crest[0]; i < cfg.crest[1]; i++) if (pts[i].y > pts[CREST].y) CREST = i; }
   const T = { N, near: (x, z) => nearestIdx(x, z)[0], GAP0, CREST, idxGap: (a, b) => (b - a + N) % N };
   LAYOUT = Object.assign({ ramps: [], pads: [], signs: [], boxes: [], obstacles: [], villains: [], peanuts: [], zones: [],
-    lasers: [], snowballs: [], dividers: [], tunnels: [], crosswalks: [], ghosts: [], traffic: null }, cfg.layout(T));
+    lasers: [], snowballs: [], dividers: [], tunnels: [], crosswalks: [], ghosts: [], penguins: [], traffic: null }, cfg.layout(T));
   RAMPS = LAYOUT.ramps;
-  for (const a of [pads, peanuts, itemBoxes, obstacles, villains, bombs, smokes, effects, lasers, traffic, snowballs, scrollTex, solids, ghosts]) a.length = 0;
+  for (const a of [pads, peanuts, itemBoxes, obstacles, villains, bombs, smokes, effects, lasers, traffic, snowballs, scrollTex, solids, ghosts, penguins]) a.length = 0;
   solidGrid.clear();
   snowfall = null;
   buildWorld();
@@ -661,6 +661,7 @@ function buildWorld() {
   if (LAYOUT.traffic) buildTraffic(LAYOUT.traffic);
   for (const sb of LAYOUT.snowballs) buildSnowballs(sb);
   for (const gd of LAYOUT.ghosts) buildGhosts(gd);
+  for (const pd of LAYOUT.penguins) for (let k = 0; k < (pd.n || 2); k++) addPenguin(pd, k);
   if (th.snow) buildSnowfall();
 
   // 道具禮物盒
@@ -1105,7 +1106,7 @@ function buildLaser(l) {
   }
   lasers.push({ idx: i, period: l.period, phase: l.phase, beams, beamM, on: false });
 }
-const laserOn = (l, t) => ((t + l.phase) % l.period) < l.period * 0.45;
+const laserOn = (l, t) => ((t + l.phase) % l.period) < l.period * 0.32;
 
 // 城市裡一般車輛（同方向慢慢開）
 function buildTraffic(cfg) {
@@ -1134,7 +1135,7 @@ function buildTraffic(cfg) {
 // 從坡上滾下來的大雪球
 function buildSnowballs(cfg) {
   const geo = new THREE.SphereGeometry(2, 18, 14);
-  for (let k = 0; k < 3; k++) {
+  for (let k = 0; k < 2; k++) {
     const m = mesh(geo, toon('#ffffff'), 0, -50, 0, world);
     snowballs.push({ cfg, s: cfg.iTop, lat: 0, active: false, t: k * cfg.every, r: 2, mesh: m, x: 0, z: 0, y: 0, idx: cfg.iTop });
   }
@@ -1192,6 +1193,74 @@ function buildGhosts(gd) {
     ghosts.push({ i0: (gd.i + k * 14) % N, amp: gd.amp || 8, spd: gd.speed || 0.9, phase: k * Math.PI + ghosts.length,
       mesh: g, arms, mats: [bodyM, faceM, hiM, blushM], x: 0, y: 0, z: 0, idx: gd.i, lat: 0, solid: true, scare: 0 });
   }
+}
+
+// 藍色企鵝：戴藍綠色軟帽，在路上搖搖擺擺走來走去，撞到會暈倒
+function buildPenguin() {
+  const g = new THREE.Group();
+  const blue = toon('#a9d0e2'), hatM = toon('#4f949e'), beige = toon('#f0d6a4'), black = toon('#1d2430');
+  const body = new THREE.Group();   // 搖擺用
+  g.add(body);
+  mesh(new THREE.SphereGeometry(1.0, 20, 16), blue, 0, 0.95, 0, body).scale.set(1, 0.95, 0.92);
+  const head = new THREE.Group();
+  head.position.y = 2.05;
+  body.add(head);
+  mesh(new THREE.SphereGeometry(0.78, 20, 16), blue, 0, 0, 0, head).scale.set(1, 0.92, 0.95);
+  // 軟帽：扁扁的帽身＋一圈波浪帽緣
+  mesh(new THREE.SphereGeometry(0.72, 16, 10), hatM, 0, 0.55, -0.05, head).scale.set(1.05, 0.5, 1.05);
+  for (let a = 0; a < 7; a++) {
+    const th = a / 7 * Math.PI * 2 + 0.3;
+    mesh(new THREE.SphereGeometry(0.26, 10, 8), hatM, Math.cos(th) * 0.66, 0.42 + (a % 2) * 0.06, Math.sin(th) * 0.66 - 0.05, head).scale.set(1, 0.6, 1);
+  }
+  const beak = mesh(new THREE.SphereGeometry(0.24, 12, 10), beige, 0, -0.08, 0.74, head);
+  beak.scale.set(1.15, 0.7, 0.9);
+  // 眼睛：平常是小黑點，暈倒時變成 ×
+  const eyes = new THREE.Group(), dizzy = new THREE.Group();
+  head.add(eyes, dizzy);
+  for (const s of [-1, 1]) {
+    mesh(new THREE.SphereGeometry(0.075, 8, 8), black, 0.3 * s, 0.14, 0.7, eyes);
+    for (const r of [0.75, -0.75]) {
+      const x = mesh(new THREE.BoxGeometry(0.22, 0.045, 0.04), black, 0.3 * s, 0.14, 0.72, dizzy);
+      x.rotation.z = r;
+    }
+  }
+  dizzy.visible = false;
+  // 翅膀
+  const flips = [];
+  for (const s of [-1, 1]) {
+    const f = new THREE.Group();
+    f.position.set(0.92 * s, 1.35, 0);
+    body.add(f);
+    mesh(new THREE.SphereGeometry(0.3, 12, 10), blue, 0.12 * s, -0.4, 0, f).scale.set(0.55, 1.35, 0.8);
+    flips.push(f);
+  }
+  // 腳
+  const feet = [];
+  for (const s of [-1, 1]) {
+    const ft = mesh(new THREE.SphereGeometry(0.3, 12, 8), beige, 0.42 * s, 0.1, 0.25, g);
+    ft.scale.set(1, 0.4, 1.35);
+    feet.push(ft);
+  }
+  // 暈倒時頭上轉圈的星星
+  const stars = new THREE.Group();
+  stars.position.y = 3.1;
+  const starM = new THREE.MeshBasicMaterial({ color: '#ffd23f' });
+  for (let k = 0; k < 3; k++) {
+    const st = new THREE.Mesh(new THREE.OctahedronGeometry(0.18, 0), starM);
+    st.position.set(Math.cos(k * 2.1) * 0.6, 0, Math.sin(k * 2.1) * 0.6);
+    stars.add(st);
+  }
+  stars.visible = false;
+  g.add(stars);
+  g.userData = { body, head, eyes, dizzy, flips, feet, stars };
+  return g;
+}
+function addPenguin(pd, k) {
+  const m = buildPenguin();
+  m.scale.setScalar(1.1);
+  world.add(m);
+  penguins.push({ idx: (pd.i + k * 6) % N, lat: (k ? 1 : -1) * 4, dir: k ? -1 : 1, spd: 2.2 + rand() * 0.8, wave: 0, dizzy: 0,
+    t: rand() * 6, mesh: m, x: 0, y: 0, z: 0, vy: 0, hop: 0, solid: true });
 }
 
 // 飄雪
@@ -1325,6 +1394,7 @@ const Sound = {
   fall() { this.tone(700, 1.1, 'sine', 0.18, 0, 90); },
   grow() { [262, 330, 392, 523].forEach((f, i) => this.tone(f, 0.25, 'square', 0.1, i * 0.08, f * 1.5)); },
   shrink() { this.tone(1400, 0.6, 'sine', 0.18, 0, 200); },
+  squeak() { this.tone(1500, 0.08, 'square', 0.1, 0, 2200); this.tone(1300, 0.12, 'square', 0.1, 0.1, 700); },
   boo() { this.tone(660, 0.18, 'sine', 0.16, 0, 990); this.tone(880, 0.22, 'sine', 0.14, 0.15, 520); },
   bark() { this.tone(520, 0.12, 'square', 0.16, 0, 300); this.tone(560, 0.14, 'square', 0.16, 0.18, 320); },
   fanfare() { [523, 659, 784, 1046, 784, 1046].forEach((f, i) => this.tone(f, 0.32, 'triangle', 0.2, i * 0.14)); },
@@ -1334,7 +1404,7 @@ const Sound = {
 // ================= 遊戲狀態 =================
 const sun = new THREE.DirectionalLight('#fff3e0', 2.4);
 const pads = [], peanuts = [], itemBoxes = [], obstacles = [], villains = [], bombs = [], smokes = [], effects = []
-const lasers = [], traffic = [], snowballs = [], scrollTex = [], solids = [], ghosts = [];
+const lasers = [], traffic = [], snowballs = [], scrollTex = [], solids = [], ghosts = [], penguins = [];
 const solidGrid = new Map();
 let snowfall = null;
 const hemi = new THREE.HemisphereLight('#ffffff', '#86b86a', 1.5);
@@ -1683,6 +1753,7 @@ function hit(car, msg) {
     if (car.isPlayer) { Sound.tone(1200, 0.25, 'triangle', 0.2); showBanner('護盾擋住了！', 900); }
     return false;
   }
+  if (state.hitStats) state.hitStats[msg] = (state.hitStats[msg] || 0) + 1;
   car.spin = SPIN_T;
   car.invuln = SPIN_T + 1.2;
   car.speed *= 0.35;
@@ -1924,7 +1995,7 @@ function updateHazards(dt) {
 function updateMovingHazards(dt, cars) {
   for (const l of lasers) {
     const on = laserOn(l, state.raceTime);
-    const warn = !on && laserOn(l, state.raceTime + 0.5);
+    const warn = !on && laserOn(l, state.raceTime + 0.8);
     l.on = on;
     for (const b of l.beams) b.visible = on || (warn && Math.floor(state.raceTime * 12) % 2 === 0);
     l.beamM.opacity = on ? 0.9 : 0.35;
@@ -1952,9 +2023,9 @@ function updateMovingHazards(dt, cars) {
   for (const gh of ghosts) {
     const t = state.raceTime + gh.phase;
     gh.scare = Math.max(0, gh.scare - dt);
-    const cyc = (t % 8) / 8;   // 一輪 8 秒：前 70% 實體，後 30% 透明
-    gh.solid = cyc < 0.7 && gh.scare <= 0;
-    const fade = gh.scare > 0 ? 0.3 : cyc < 0.66 ? 1 : cyc < 0.7 ? 1 - (cyc - 0.66) / 0.04 * 0.7 : cyc > 0.96 ? 0.3 + (cyc - 0.96) / 0.04 * 0.7 : 0.3;
+    const cyc = (t % 8) / 8;   // 一輪 8 秒：前 60% 實體，後 40% 透明
+    gh.solid = cyc < 0.6 && gh.scare <= 0;
+    const fade = gh.scare > 0 ? 0.3 : cyc < 0.56 ? 1 : cyc < 0.6 ? 1 - (cyc - 0.56) / 0.04 * 0.7 : cyc > 0.96 ? 0.3 + (cyc - 0.96) / 0.04 * 0.7 : 0.3;
     gh.mats[0].opacity = 0.92 * fade;
     for (let m = 1; m < gh.mats.length; m++) gh.mats[m].opacity = fade;
     gh.lat = Math.sin(t * gh.spd) * gh.amp;
@@ -1967,10 +2038,53 @@ function updateMovingHazards(dt, cars) {
     if (!gh.solid) continue;
     for (const c of cars) {
       if (c.fallT > 0 || Math.abs(c.y + 1.2 - gh.y) > 3) continue;
-      if ((c.x - x) ** 2 + (c.z - z) ** 2 < (1.3 + 1.3 * c.scaleNow) ** 2) {
+      if ((c.x - x) ** 2 + (c.z - z) ** 2 < (1.0 + 1.15 * c.scaleNow) ** 2) {
         hit(c, '被幽靈嚇到了！轉圈圈～');
         gh.scare = 2;
         Sound.boo();
+        break;
+      }
+    }
+  }
+  for (const pg of penguins) {
+    const u = pg.mesh.userData;
+    pg.t += dt;
+    if (pg.dizzy > 0) {
+      // 被撞：往後翻、坐在地上暈頭轉向
+      pg.dizzy -= dt;
+      pg.vy -= G * dt; pg.hop = Math.max(0, pg.hop + pg.vy * dt);
+      u.body.rotation.x = pg.hop > 0 ? u.body.rotation.x - dt * 8 : lerp(u.body.rotation.x, -0.5, 1 - Math.exp(-dt * 10));
+      u.stars.visible = true;
+      u.stars.rotation.y += dt * 6;
+      u.eyes.visible = false; u.dizzy.visible = true;
+      if (pg.dizzy <= 0) { u.body.rotation.x = 0; u.stars.visible = false; u.eyes.visible = true; u.dizzy.visible = false; }
+    } else if (pg.wave > 0) {
+      // 停下來揮手
+      pg.wave -= dt;
+      u.flips.forEach((f, k) => { f.rotation.z = (k ? -1 : 1) * (2.2 + Math.sin(pg.t * 10) * 0.4); });
+      u.body.rotation.z = 0;
+    } else {
+      // 搖搖擺擺走路，走到路邊就轉身
+      pg.lat += pg.dir * pg.spd * dt;
+      if (Math.abs(pg.lat) > HW - 1.5) { pg.lat = Math.sign(pg.lat) * (HW - 1.5); pg.dir = -pg.dir; if (Math.random() < 0.5) pg.wave = 1.2; }
+      const ph = pg.t * 9;
+      u.body.rotation.z = Math.sin(ph) * 0.22;
+      u.feet[0].position.z = 0.25 + Math.sin(ph) * 0.22; u.feet[1].position.z = 0.25 - Math.sin(ph) * 0.22;
+      u.flips.forEach((f, k) => { f.rotation.z = (k ? -1 : 1) * (0.3 + Math.abs(Math.sin(ph)) * 0.35); });
+    }
+    pg.solid = pg.dizzy <= 0;
+    const [x, z] = latPos(pg.idx, pg.lat);
+    pg.x = x; pg.z = z; pg.y = pts[pg.idx].y + pg.hop;
+    pg.mesh.position.set(x, pg.y, z);
+    const face = pg.wave > 0 || pg.dizzy > 0 ? Math.PI : (pg.dir > 0 ? -Math.PI / 2 : Math.PI / 2);
+    pg.mesh.rotation.y = headingAt(pg.idx) + face;
+    if (!pg.solid) continue;
+    for (const c of cars) {
+      if (c.fallT > 0 || c.air || Math.abs(c.y - pg.y) > 2.5) continue;
+      if ((c.x - x) ** 2 + (c.z - z) ** 2 < (0.95 + 1.15 * c.scaleNow) ** 2) {
+        hit(c, '撞到企鵝了！暈頭轉向～');
+        pg.dizzy = 2.5; pg.vy = 9; pg.hop = 0.01; pg.wave = 0;
+        Sound.squeak();
         break;
       }
     }
@@ -1996,7 +2110,7 @@ function updateMovingHazards(dt, cars) {
     let done = idxAhead(cfg.iBottom, b.idx) > idxAhead(cfg.iBottom, cfg.iTop);
     for (const c of cars) {
       if (c.fallT > 0 || Math.abs(c.y + 1 - b.y) > 3.5) continue;
-      if ((c.x - x) ** 2 + (c.z - z) ** 2 < (b.r + 1.4 * c.scaleNow) ** 2) {
+      if ((c.x - x) ** 2 + (c.z - z) ** 2 < (b.r + 1.1 * c.scaleNow) ** 2) {
         hit(c, '被大雪球撞到了！');
         done = true;
         break;
@@ -2030,6 +2144,7 @@ function resetHazards() {
   for (const v of villains) { v.state = 'wait'; v.t = 0; v.lat = v.side * (HW + 3.5); v.mesh.rotation.x = 0; }
   traffic.forEach((v, k) => { v.s = (k + 0.5) * N / traffic.length; });
   snowballs.forEach((b, k) => { b.active = false; b.t = 1 + k * b.cfg.every; });
+  penguins.forEach((pg) => { pg.dizzy = 0; pg.wave = 0; pg.hop = 0; const u = pg.mesh.userData; u.body.rotation.set(0, 0, 0); u.stars.visible = false; u.eyes.visible = true; u.dizzy.visible = false; });
   updateHazards(0);
 }
 
@@ -2045,7 +2160,7 @@ function aiControl(car, dt) {
   // 閃避前方的路障、煙霧與壞人（不是每次都閃得掉）
   const dodge = state.difficulty === 0 ? 2.6 : 3.8;
   const hazards = [...obstacles.filter((o) => o.knocked <= 0), ...smokes, ...villains.filter((v) => v.state !== 'knocked'),
-    ...traffic, ...snowballs.filter((b) => b.active), ...ghosts.filter((g) => g.solid)];
+    ...traffic, ...snowballs.filter((b) => b.active), ...ghosts.filter((g) => g.solid), ...penguins.filter((g) => g.solid)];
   for (const o of hazards) {
     const d = idxAhead(car.idx, o.idx);
     if (d > 0 && d < 38 && Math.abs(o.lat - lane) < dodge) lane = clamp(o.lat + (lane >= o.lat ? 4.8 : -4.8), -HW + 1.5, HW - 1.5);
@@ -2078,7 +2193,8 @@ function aiControl(car, dt) {
   // 雷射門：算一下到達時會不會剛好開著，會的話先放慢
   for (const l of lasers) {
     const d = idxAhead(car.idx, l.idx);
-    if (d > 2 && d < 45 && car.speed > 5 && laserOn(l, state.raceTime + d * SPACING / car.speed) && Math.random() > 0.15) { gas = false; if (d < 18) brake = true; }
+    const eta = state.raceTime + d * SPACING / Math.max(car.speed, 5);
+    if (d > 2 && d < 50 && (laserOn(l, eta - 0.3) || laserOn(l, eta) || laserOn(l, eta + 0.3))) { gas = false; if (d < 22) brake = true; }
   }
   if (ai.blunderT > 0) {
     if (ai.blunder === 'wobble') steer = clamp(steer + Math.sin(time * 7) * 1.1, -1, 1);   // 方向盤亂打
@@ -2642,7 +2758,7 @@ if (AUTO || params.has('debug')) {
     state, villains, obstacles, bombs, smokes, lasers, traffic, snowballs,
     get GAP0() { return GAP0; },
     get pts() { return pts; },
-    solids,
+    solids, ghosts, penguins,
     near: (x, z) => nearestIdx(x, z)[0],
     loadTrack(k) { loadTrack(k); state.track = k; setupGrid(state.selected); resetHazards(); },
     place(i, lat, sp) {
