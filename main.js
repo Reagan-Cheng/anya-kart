@@ -330,8 +330,48 @@ function buildKart(cfg) {
   shield.position.y = 1.3;
   shield.visible = false;
   kart.add(shield);
-  kart.userData = { body, wheels, steers, flames, shield, head: driver.userData.head };
+  const dog = buildDog();
+  dog.position.set(0, 0, 5.3);
+  dog.scale.setScalar(1.35);
+  dog.visible = false;
+  kart.add(dog);
+  kart.userData = { body, wheels, steers, flames, shield, dog, head: driver.userData.head };
   return kart;
+}
+
+// 彭德：拉車的大白狗
+function buildDog() {
+  const g = new THREE.Group();
+  const white = toon('#fbfaf6'), grey = toon('#d9d6cf'), black = toon('#222222'), pink = toon('#ff8fa3');
+  const body = mesh(new THREE.CapsuleGeometry(0.6, 1.3, 6, 12), white, 0, 1.25, 0, g);
+  body.rotation.x = Math.PI / 2;
+  const head = new THREE.Group();
+  head.position.set(0, 1.85, 1.15);
+  g.add(head);
+  mesh(new THREE.SphereGeometry(0.55, 16, 12), white, 0, 0, 0, head);
+  mesh(new THREE.SphereGeometry(0.3, 12, 10), white, 0, -0.12, 0.42, head).scale.set(1, 0.8, 1);
+  mesh(new THREE.SphereGeometry(0.09, 8, 8), black, 0, -0.04, 0.72, head);
+  mesh(new THREE.SphereGeometry(0.1, 8, 6), pink, 0, -0.32, 0.6, head).scale.set(1, 0.5, 1);
+  for (const s of [-1, 1]) {
+    mesh(new THREE.SphereGeometry(0.07, 8, 8), black, 0.2 * s, 0.13, 0.48, head);
+    const ear = mesh(new THREE.SphereGeometry(0.22, 10, 8), grey, 0.48 * s, 0.05, -0.05, head);
+    ear.scale.set(0.45, 1.1, 0.8);
+  }
+  const legs = [];
+  for (const [x, z] of [[-0.35, 0.75], [0.35, 0.75], [-0.35, -0.75], [0.35, -0.75]]) {
+    const hip = new THREE.Group();
+    hip.position.set(x, 1.0, z);
+    g.add(hip);
+    mesh(new THREE.CapsuleGeometry(0.17, 0.55, 4, 8), white, 0, -0.45, 0, hip);
+    legs.push(hip);
+  }
+  const tail = mesh(new THREE.CapsuleGeometry(0.15, 0.5, 4, 8), white, 0, 1.6, -1.25, g);
+  tail.rotation.x = -0.8;
+  // 牽繩
+  const rope = mesh(new THREE.CylinderGeometry(0.04, 0.04, 2.2, 6), toon('#e2577f'), 0, 0.8, -1.9, g);
+  rope.rotation.x = Math.PI / 2 - 0.15;
+  g.userData.legs = legs;
+  return g;
 }
 
 function nameTag(cfg) {
@@ -881,6 +921,9 @@ const Sound = {
   explode() { this.noise(0.6, 0.5); this.tone(160, 0.5, 'square', 0.14, 0, 40); },
   tick() { this.tone(1500, 0.04, 'square', 0.05); },
   fall() { this.tone(700, 1.1, 'sine', 0.18, 0, 90); },
+  grow() { [262, 330, 392, 523].forEach((f, i) => this.tone(f, 0.25, 'square', 0.1, i * 0.08, f * 1.5)); },
+  shrink() { this.tone(1400, 0.6, 'sine', 0.18, 0, 200); },
+  bark() { this.tone(520, 0.12, 'square', 0.16, 0, 300); this.tone(560, 0.14, 'square', 0.16, 0.18, 320); },
   fanfare() { [523, 659, 784, 1046, 784, 1046].forEach((f, i) => this.tone(f, 0.32, 'triangle', 0.2, i * 0.14)); },
   setMuted(m) { this.muted = m; if (this.master) this.master.gain.value = m ? 0 : 0.5; },
 };
@@ -899,7 +942,11 @@ const ITEMS = {
   smoke: { icon: '💨', name: '間諜煙霧彈', w: [5, 3, 2, 1] },
   shield: { icon: '🛡️', name: '間諜護盾', w: [4, 3, 2, 1] },
   peanut: { icon: '🥜', name: '花生大放送', w: [3, 2, 1, 1] },
+  grow: { icon: '🧪', name: '變大藥水', w: [1, 2, 3, 3] },
+  shrink: { icon: '🔦', name: '縮小手電筒', w: [0, 2, 3, 4] },
+  dog: { icon: '🐶', name: '彭德拉車', w: [0, 1, 3, 5] },
 };
+const BIG_T = 8, SMALL_T = 6, DOG_T = 3.5;
 const ITEM_KEYS = Object.keys(ITEMS);
 let raceModels = [], previewModels = [], time = 0;
 const camPos = new THREE.Vector3(), camLook = new THREE.Vector3();
@@ -912,6 +959,7 @@ function makeCar(ri, isPlayer) {
     lap: 0, checkpoint: true, peanuts: 0, boost: 0, finished: false, finishTime: 0, offroad: false, wheelSpin: 0,
     maxSpeed: (42 + s.speed * 2) * speedMul(), accel: (12 + s.accel * 3) * speedMul(), handling: 1.85 + s.handling * 0.13,
     s: 0, vy: 0, air: false, prevSy: 0, fallT: 0, spin: 0, invuln: 0, shield: 0, item: null, roll: 0,
+    big: 0, small: 0, dog: 0, scaleNow: 1,
     ai: { baseSkill: 1, skill: 1, phase: rand() * 6, bias: (rand() - 0.5) * 4, hold: 0 },
   };
 }
@@ -969,6 +1017,16 @@ function updateCar(car, dt, ctl) {
     if (car.fallT <= 0) respawn(car);
     return;
   }
+  car.big = Math.max(0, car.big - dt);
+  car.small = Math.max(0, car.small - dt);
+  car.dog = Math.max(0, car.dog - dt);
+  if (car.dog > 0) {
+    // 彭德拉車：自動駕駛往前衝
+    car.ai.blunderT = 0;
+    const steer = car.isPlayer && !AUTO && !car.finished ? aiControl(car, dt).steer : ctl.steer;
+    ctl = { steer, gas: true, brake: false };
+    car.spin = 0;
+  }
   if (car.spin > 0) {
     car.spin -= dt;
     ctl = { steer: 0, gas: false, brake: false };
@@ -977,8 +1035,11 @@ function updateCar(car, dt, ctl) {
   car.steer += clamp(ctl.steer - car.steer, -dt * 6, dt * 6);
   car.offroad = !car.air && Math.abs(car.lat) > HW + 1.2;
   let maxSp = car.maxSpeed * (1 + car.peanuts * 0.012) * (car.isPlayer && !car.finished && !AUTO ? 1 : car.ai.skill);
-  if (car.offroad) maxSp *= 0.5;
+  if (car.offroad && car.dog <= 0) maxSp *= 0.5;
+  if (car.big > 0) maxSp *= 1.08;
+  if (car.small > 0) maxSp *= 0.72;
   if (car.boost > 0) { maxSp += 18 * speedMul(); car.boost -= dt; }
+  if (car.dog > 0) { maxSp = car.maxSpeed * 1.45; car.speed = Math.max(car.speed, lerp(car.speed, maxSp, 1 - Math.exp(-dt * 4))); }
   if (!car.air) {
     if (ctl.gas && car.speed < maxSp) car.speed += car.accel * dt * (1.15 - Math.max(0, car.speed) / maxSp);
     if (!ctl.gas && !ctl.brake) car.speed -= Math.sign(car.speed) * Math.min(Math.abs(car.speed), 9 * dt);
@@ -1089,7 +1150,7 @@ function respawn(car) {
 
 // 被打中：轉圈圈（有護盾就擋掉）
 function hit(car, msg) {
-  if (car.invuln > 0 || car.fallT > 0) return false;
+  if (car.invuln > 0 || car.fallT > 0 || car.big > 0 || car.dog > 0) return false;
   if (car.shield > 0) {
     car.shield = 0;
     car.invuln = 1;
@@ -1139,6 +1200,30 @@ function useItem(car) {
   } else if (it === 'shield') {
     car.shield = 10;
     if (car.isPlayer) Sound.tone(600, 0.4, 'sine', 0.2, 0, 1200);
+  } else if (it === 'grow') {
+    car.big = BIG_T;
+    car.small = 0;
+    if (car.isPlayer) { Sound.grow(); showBanner('變大了！撞誰誰轉圈！', 1200); }
+  } else if (it === 'shrink') {
+    // 縮小所有跑在前面的車
+    const mine = car.lap * N + car.s;
+    let n = 0;
+    for (const c of state.cars) {
+      if (c === car || c.finished || c.lap * N + c.s <= mine) continue;
+      spawnEffect(c.x, c.y + 1.5, c.z, '#b48cff', 3);
+      n++;
+      if (c.shield > 0) { c.shield = 0; continue; }
+      if (c.big > 0) { c.big = 0; continue; }
+      if (c.dog > 0) continue;
+      c.small = SMALL_T;
+      c.item = null; c.roll = 0;
+      if (c.isPlayer) { Sound.shrink(); showBanner('被縮小了！', 1200); }
+    }
+    if (car.isPlayer) { Sound.shrink(); showBanner(n ? `縮小前面 ${n} 台車！` : '前面沒有車…', 1000); }
+  } else if (it === 'dog') {
+    car.dog = DOG_T;
+    car.spin = 0;
+    if (car.isPlayer) { Sound.bark(); showBanner('彭德衝衝衝！', 1200); }
   } else {
     car.peanuts = Math.min(10, car.peanuts + 3);
     if (car.isPlayer) Sound.ding();
@@ -1420,14 +1505,25 @@ function collide() {
   const cs = state.cars;
   for (let i = 0; i < cs.length; i++) for (let j = i + 1; j < cs.length; j++) {
     const a = cs[i], b = cs[j];
+    if (a.fallT > 0 || b.fallT > 0 || Math.abs(a.y - b.y) > 3) continue;
     const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz);
-    if (d < 2.7 && d > 0.001) {
-      const push = (2.7 - d) / 2, nx = dx / d, nz = dz / d;
-      a.x -= nx * push; a.z -= nz * push; b.x += nx * push; b.z += nz * push;
+    const r = 1.35 * (a.scaleNow + b.scaleNow);
+    if (d < r && d > 0.001) {
+      const nx = dx / d, nz = dz / d;
+      // 大車把小車推開比較多
+      const wa = b.scaleNow / (a.scaleNow + b.scaleNow), wb = 1 - wa, push = r - d;
+      a.x -= nx * push * wa; a.z -= nz * push * wa; b.x += nx * push * wb; b.z += nz * push * wb;
       a.speed *= 0.97; b.speed *= 0.97;
-      if ((a.isPlayer || b.isPlayer) && push > 0.15) Sound.bump();
+      if ((a.isPlayer || b.isPlayer) && push > 0.3) Sound.bump();
+      bully(a, b); bully(b, a);
     }
   }
+}
+// 變大或彭德拉車撞到別人 → 對方轉圈；一般車壓到縮小的車 → 縮小的車轉圈
+function bully(a, b) {
+  const strong = a.big > 0 || a.dog > 0;
+  if (strong && !(b.big > 0 || b.dog > 0)) hit(b, '被撞飛了！轉圈圈～');
+  else if (b.small > 0 && a.small <= 0) hit(b, '被壓扁了！轉圈圈～');
 }
 
 function onLap(car) {
@@ -1472,8 +1568,21 @@ function syncModel(car, dt) {
   for (const s of u.steers) s.rotation.y = -car.steer * 0.4;
   u.head.rotation.z = car.steer * 0.18;
   for (const f of u.flames) {
-    f.visible = car.boost > 0;
+    f.visible = car.boost > 0 || car.dog > 0;
     f.scale.set(1, 0.7 + Math.random() * 0.6, 1);
+  }
+  // 變大／縮小（快結束時閃爍提醒）
+  let target = car.big > 0 ? 1.7 : car.small > 0 ? 0.55 : 1;
+  const left = car.big > 0 ? car.big : car.small;
+  if (left > 0 && left < 1.2 && Math.floor(time * 8) % 2 === 0) target = 1;
+  car.scaleNow = lerp(car.scaleNow, target, 1 - Math.exp(-(dt || 0.016) * 8));
+  m.scale.setScalar(car.scaleNow);
+  // 彭德拉車
+  u.dog.visible = car.dog > 0;
+  if (car.dog > 0) {
+    const ph = time * 18;
+    u.dog.userData.legs.forEach((l, k) => { l.rotation.x = Math.sin(ph + (k % 2) * Math.PI) * 0.9; });
+    u.dog.position.y = Math.abs(Math.sin(ph)) * 0.15;
   }
 }
 
@@ -1806,8 +1915,9 @@ function tick(dt) {
 
 function updateCamera(dt) {
   const c = state.player, fx = Math.sin(c.heading), fz = Math.cos(c.heading);
-  const dist = 8.5 + Math.max(0, c.speed) * 0.035;
-  const want = new THREE.Vector3(c.x - fx * dist, c.y + 3.8, c.z - fz * dist);
+  const sizeK = 0.55 + 0.45 * c.scaleNow;   // 車變大鏡頭拉遠、變小拉近
+  const dist = (8.5 + Math.max(0, c.speed) * 0.035) * sizeK;
+  const want = new THREE.Vector3(c.x - fx * dist, c.y + 3.8 * sizeK, c.z - fz * dist);
   const p = pts[c.idx], s = SIDE[c.idx];
   const lat = (want.x - p.x) * s.x + (want.z - p.z) * s.z;
   if (c.fallT <= 0) want.y = Math.max(want.y, surfaceY({ x: want.x, z: want.z, idx: c.idx, s: c.s, lat }) + 1.5);
