@@ -1,6 +1,6 @@
 import * as THREE from './lib/three.module.min.js';
-import { TRACKS } from './tracks.js?v=2.0';
-import { createAnyaBuilder } from './anya-model.js?v=2.0';
+import { TRACKS } from './tracks.js?v=2.1';
+import { createAnyaBuilder } from './anya-model.js?v=2.1';
 
 // ================= 小工具 =================
 const $ = (id) => document.getElementById(id);

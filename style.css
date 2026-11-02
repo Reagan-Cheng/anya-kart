@@ -228,6 +228,13 @@ html.phone body.racing .mute-btn { top: calc(max(14px, env(safe-area-inset-top))
   background: rgba(255,255,255,.8); color: #6a4a5a; font-size: 13px; font-weight: 800; padding: 3px 10px; border-radius: 99px;
 }
 .pause-ver { position: static; margin-top: 8px; }
+/* 非營利聲明 */
+.notice-tag {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: max(10px, env(safe-area-inset-bottom));
+  width: max-content; max-width: calc(100% - 220px); text-align: center;
+  background: rgba(255,255,255,.8); color: #6a4a5a; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 99px;
+}
+.pause-notice { position: static; transform: none; max-width: none; margin-top: 6px; }
 .update-note {
   border: none; border-radius: 99px; padding: 10px 22px; font-size: 18px; font-weight: 900; color: #4a2a3a;
   background: #ffe066; box-shadow: 0 4px 0 #d9a400; animation: glow 1s infinite alternate;
