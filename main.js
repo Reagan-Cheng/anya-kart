@@ -1,6 +1,6 @@
 import * as THREE from './lib/three.module.min.js';
-import { TRACKS } from './tracks.js?v=2.1';
-import { createAnyaBuilder } from './anya-model.js?v=2.1';
+import { TRACKS } from './tracks.js?v=2.2';
+import { createAnyaBuilder } from './anya-model.js?v=2.2';
 
 // ================= 小工具 =================
 const $ = (id) => document.getElementById(id);
@@ -409,10 +409,10 @@ function loadTrack(k) {
   const T = { N, near: (x, z) => nearestIdx(x, z)[0], near3, GAP0, CREST, EDGE, idxGap: (a, b) => (b - a + N) % N };
   LAYOUT = Object.assign({ ramps: [], pads: [], signs: [], boxes: [], obstacles: [], villains: [], peanuts: [], zones: [],
     lasers: [], snowballs: [], dividers: [], tunnels: [], crosswalks: [], ghosts: [], penguins: [], traffic: null,
-    railless: [], crushers: [], spinners: [] }, cfg.layout(T));
+    railless: [], crushers: [], spinners: [], hands: [] }, cfg.layout(T));
   RAMPS = LAYOUT.ramps;
   for (const r of LAYOUT.railless) for (let k = 0; k < r.len; k++) isDeck[(r.i0 + k + N) % N] = false;
-  for (const a of [pads, peanuts, itemBoxes, obstacles, villains, bombs, smokes, effects, lasers, traffic, snowballs, scrollTex, solids, ghosts, penguins, crushers, spinners, tides, winds]) a.length = 0;
+  for (const a of [pads, peanuts, itemBoxes, obstacles, villains, bombs, smokes, effects, lasers, traffic, snowballs, scrollTex, solids, ghosts, penguins, crushers, spinners, tides, winds, hands]) a.length = 0;
   solidGrid.clear();
   snowfall = null;
   buildWorld();
@@ -568,6 +568,7 @@ function buildRoadAndArch(th) {
   for (const l of LAYOUT.lasers) buildLaser(l);
   for (const c of LAYOUT.crushers) buildCrusher(c);
   for (const sp of LAYOUT.spinners) buildSpinner(sp);
+  for (const hd of LAYOUT.hands) buildHand(hd);
   if (LAYOUT.traffic) buildTraffic(LAYOUT.traffic);
   for (const sb of LAYOUT.snowballs) buildSnowballs(sb);
   for (const gd of LAYOUT.ghosts) buildGhosts(gd);
@@ -1612,6 +1613,229 @@ function spinnerBlocks(sp, ang, lat, along = 0) {
   return false;
 }
 
+// 雲朵大手：車子經過時從雲海冒出來，飄在車子前面跟著跑（路上的影子會跟著你），
+// 影子變紅閃爍後往下抓；被抓到會被舉起來丟到雲下面，再從雲裡咻～飛回賽道
+const HAND_R = 4.6;   // 抓得到的範圍（側向）
+function buildHand(hd) {
+  const g = new THREE.Group();
+  g.rotation.order = 'YXZ';
+  g.visible = false;
+  world.add(g);
+  const hand = new THREE.Group();
+  hand.scale.setScalar(1.35);
+  g.add(hand);
+  const white = toon('#ffffff');
+  mesh(new THREE.SphereGeometry(1, 16, 12), white, 0, 0, 0, hand).scale.set(3.0, 1.15, 2.8);
+  // 四根手指（指尖朝 +z），用軸心轉 x 來彎曲
+  const fingers = [];
+  for (let k = 0; k < 4; k++) {
+    const piv = new THREE.Group();
+    piv.position.set(-1.8 + k * 1.2, 0, 2.2);
+    hand.add(piv);
+    const len = k === 1 || k === 2 ? 2.3 : 1.8;
+    mesh(new THREE.CapsuleGeometry(0.55, len, 4, 10), white, 0, 0, len / 2 + 0.3, piv).rotation.x = Math.PI / 2;
+    fingers.push(piv);
+  }
+  const thumb = new THREE.Group();
+  thumb.rotation.order = 'YXZ';
+  thumb.position.set(2.6, 0, 0.2);
+  thumb.rotation.y = 1.1;
+  hand.add(thumb);
+  mesh(new THREE.CapsuleGeometry(0.6, 1.5, 4, 10), white, 0, 0, 1.1, thumb).rotation.x = Math.PI / 2;
+  fingers.push(thumb);
+  // 手背上的笑臉
+  for (const s of [-1, 1]) {
+    mesh(new THREE.SphereGeometry(0.28, 8, 6), toon('#3a2a3a'), s * 0.9, 1.0, 0.5, hand);
+    mesh(new THREE.SphereGeometry(0.4, 8, 6), toon('#ffb3cf'), s * 1.7, 0.85, 0.1, hand).scale.set(1, 0.4, 0.8);
+  }
+  // 雲朵手臂：從手腕往天上延伸
+  for (const [x, y, z, r] of [[0, 0.4, -2.8, 1.9], [1.3, 0.9, -3.3, 1.4], [-1.3, 0.9, -3.3, 1.4], [0, 2.8, -5.2, 2.2], [0, 5.6, -7, 2.6], [0, 9.2, -8.4, 3.0]]) {
+    mesh(new THREE.SphereGeometry(r, 12, 10), white, x, y, z, hand);
+  }
+  g.traverse((o) => { o.castShadow = false; });   // 只用下面的圓圈當影子，才看得出它要抓哪裡
+  const shadow = new THREE.Mesh(new THREE.CircleGeometry(HAND_R, 28), new THREE.MeshBasicMaterial({
+    color: '#3a1a4a', transparent: true, opacity: 0.4, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 }));
+  // 圓圈外框
+  shadow.add(new THREE.Mesh(new THREE.RingGeometry(HAND_R - 0.35, HAND_R, 32), new THREE.MeshBasicMaterial({
+    color: '#ffffff', transparent: true, opacity: 0.8, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -5 })));
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.visible = false;
+  world.add(shadow);
+  hands.push({ i: (hd.i + N) % N, g, fingers, shadow, phase: 'idle', t: 0, cool: 0, seen: new Map(), target: null, held: null,
+    s: 0, lat: 0, h: 0, side: 1, curl: 0, curlT: 0 });
+}
+function resetHands() {
+  for (const h of hands) {
+    h.phase = 'idle'; h.target = h.held = null; h.cool = 0; h.seen = new Map();
+    h.g.visible = h.shadow.visible = false;
+  }
+}
+// 手在賽道上的位置：s 是賽道上的點（可以有小數）、lat 側向、h 離路面的高度
+function placeHand(h) {
+  const s = ((h.s % N) + N) % N, i = Math.floor(s), j = (i + 1) % N, f = s - i;
+  const p = pts[i], q = pts[j], sd = SIDE[i];
+  const ry = lerp(p.y, q.y, f), x = lerp(p.x, q.x, f) + sd.x * h.lat, z = lerp(p.z, q.z, f) + sd.z * h.lat;
+  h.g.position.set(x, ry + h.h, z);
+  h.g.rotation.y = headingAt(i) + Math.PI;   // 手指朝著跑過來的車
+  h.ry = ry;
+  h.shadow.visible = h.phase === 'aim' || h.phase === 'slam' || h.phase === 'bottom';
+  h.shadow.position.set(x, ry + 0.15, z);
+}
+function startHand(h, c) {
+  h.target = c; c.handed = h;
+  h.phase = 'rise'; h.t = 0;
+  h.side = Math.random() < 0.5 ? -1 : 1;
+  h.aiDodge = Math.random() < 0.5;
+  h.g.visible = true;
+  h.g.rotation.z = 0;
+  h.curlT = -0.3;
+  if (c.isPlayer) { Sound.whoosh(); showBanner('☁️ 雲朵大手來了！快閃開！', 1500); }
+}
+function leaveHand(h) {
+  if (h.target && h.target.handed === h) h.target.handed = null;
+  h.phase = 'leave'; h.t = 0; h.curlT = -0.3;
+  h.lat0 = h.lat; h.h0 = h.h;
+}
+// 這台車抓不抓得到：無敵、變大、彭德拉車抓不到；有護盾就擋掉
+function tryGrab(h, c) {
+  if (c.grab || c.fallT > 0 || c.invuln > 0 || c.big > 0 || c.dog > 0 || c.gold > 0) return false;
+  const along = Math.abs((idxAhead(Math.floor(h.s) % N, c.idx) + N / 2) % N - N / 2) * SPACING;
+  if (along > 4 || Math.abs(c.lat - h.lat) > HAND_R - 0.6 || c.y > h.ry + 4) return false;
+  if (c.shield > 0) {
+    c.shield = 0; c.invuln = 1;
+    spawnEffect(c.x, c.y + 1, c.z, '#7fd8ff', 3);
+    if (c.isPlayer) showBanner('護盾擋住大手了！', 1000);
+    leaveHand(h);
+    return true;
+  }
+  c.grab = { ph: 'held', t: 0, idx0: c.idx };
+  c.fallT = 99;   // 抓住的時候其他機關、道具都碰不到
+  c.speed = 0; c.air = true; c.glide = false; c.spin = 0; c.vy = 0;
+  if (c.handed && c.handed !== h) c.handed = null;
+  h.held = c; h.phase = 'lift'; h.t = 0; h.curlT = 1;
+  h.lat0 = h.lat; h.liftSide = Math.sign(h.lat) || h.side;
+  if (c.isPlayer) { Sound.grab(); showBanner('被雲朵大手抓住了！', 1300); state.shake = 0.3; }
+  return true;
+}
+function updateHands(dt, cars) {
+  for (const h of hands) {
+    h.cool -= dt;
+    h.t += dt;
+    const c = h.target;
+    if (h.phase === 'idle') {
+      if (h.cool > 0 || state.mode !== 'race') continue;
+      for (const car of cars) {
+        if (idxAhead(h.i, car.idx) > 8 || car.grab || car.handed || car.fallT > 0 || car.finished) continue;
+        if (h.seen.get(car) === car.lap) continue;
+        h.seen.set(car, car.lap);
+        if (Math.random() > (car.isPlayer ? 0.7 : 0.5)) continue;
+        startHand(h, car);
+        break;
+      }
+      continue;
+    }
+    // 追的那台車掉下去或跑完了 → 手縮回去
+    if ((h.phase === 'rise' || h.phase === 'aim' || h.phase === 'slam') && (c.fallT > 0 || c.finished)) leaveHand(h);
+    if (h.phase === 'rise') {
+      const k = smooth(0, 1, h.t / 1.0);
+      h.s = c.s + lerp(24, 8, k) / SPACING;
+      h.lat = lerp(h.side * (HW + 20), c.lat, k);
+      h.h = lerp(-12 - roadY(h.s), 9, k);
+      if (h.t >= 1.0) { h.phase = 'aim'; h.t = 0; }
+    } else if (h.phase === 'aim') {
+      h.s = c.s + 8 / SPACING;
+      // 影子跟著車子的車道移動；變紅閃爍時就停住不動，這時候趕快換車道就躲得掉
+      const warn = h.t > 1.1;
+      if (!warn) h.lat += (c.lat - h.lat) * (1 - Math.exp(-dt * 2.2));
+      h.h = 9 + Math.sin(h.t * 4) * 0.4;
+      h.shadow.material.color.set(warn && Math.floor(h.t * 10) % 2 ? '#ff3b6b' : '#3a1a4a');
+      h.shadow.material.opacity = warn ? 0.6 : 0.4;
+      if (h.t >= 1.7) { h.phase = 'slam'; h.t = 0; h.shadow.material.color.set('#ff3b6b'); }
+    } else if (h.phase === 'slam') {
+      const k = Math.min(1, h.t / 0.28) ** 2;
+      h.s = c.s + lerp(8, 0, k) / SPACING;
+      h.h = lerp(9, 1.8, k);
+      if (k > 0.6) for (const car of [c, ...cars]) if (h.phase === 'slam' && tryGrab(h, car)) break;
+      if (h.phase === 'slam' && h.t >= 0.28) { h.phase = 'bottom'; h.t = 0; spawnEffect(h.g.position.x, h.ry + 0.5, h.g.position.z, '#ffffff', 4); }
+    } else if (h.phase === 'bottom') {
+      // 停在路上一下下：後面開過來的車也可能被抓
+      for (const car of cars) if (h.phase === 'bottom' && tryGrab(h, car)) break;
+      if (h.phase === 'bottom' && h.t >= 0.4) {
+        if (c.isPlayer && !c.grab) showBanner('躲過了！好險～', 1000);
+        leaveHand(h);
+      }
+    } else if (h.phase === 'lift') {
+      const k = smooth(0, 1, h.t / 1.0);
+      h.h = lerp(1.8, 18, k);
+      h.lat = lerp(h.lat0, h.liftSide * (HW + 16), k);
+      h.g.rotation.z = -h.liftSide * 0.35 * k;
+      if (h.t >= 1.0) { h.phase = 'throw'; h.t = 0; }
+    } else if (h.phase === 'throw') {
+      h.g.rotation.z = -h.liftSide * lerp(0.35, -0.6, Math.min(1, h.t / 0.3));
+      if (h.t >= 0.3) {
+        const car = h.held, sd = SIDE[car.idx];
+        car.grab = { ...car.grab, ph: 'fall', t: 0, vx: sd.x * h.liftSide * 12, vz: sd.z * h.liftSide * 12, vy: 5 };
+        if (car.isPlayer) { Sound.fall(); showBanner('咻～被丟到雲下面了！', 1300); }
+        h.held = null;
+        leaveHand(h);
+      }
+    } else if (h.phase === 'leave') {
+      // 沉回雲海裡
+      const k = smooth(0, 1, h.t / 1.6);
+      h.lat = lerp(h.lat0, Math.sign(h.lat0 || h.side) * (HW + 26), k);
+      h.h = lerp(h.h0, -14 - h.ry, k);
+      h.g.rotation.z *= Math.exp(-dt * 3);
+      if (h.t >= 1.6) { h.phase = 'idle'; h.g.visible = false; h.cool = 4; h.target = null; continue; }
+    }
+    h.curl += (h.curlT - h.curl) * (1 - Math.exp(-dt * 10));
+    h.fingers.forEach((f, k) => { f.rotation.x = h.curl * (k < 4 ? 1.5 : 1.1); });
+    placeHand(h);
+    // 被抓著的車黏在手掌下面
+    if (h.held) {
+      const car = h.held, p = h.g.position;
+      car.x = p.x; car.y = p.y - 2.4; car.z = p.z;
+      car.pitch = Math.sin(time * 9) * 0.15;
+    }
+  }
+}
+// 被丟下去 → 掉進雲海 → 從雲裡咻～飛回賽道前面一點
+function updateGrabbed(car, dt) {
+  const g = car.grab;
+  g.t += dt;
+  if (g.ph === 'fall') {
+    g.vy -= G * 1.2 * dt;
+    car.x += g.vx * dt; car.z += g.vz * dt; car.y += g.vy * dt;
+    car.heading += dt * 6; car.pitch = Math.sin(g.t * 8) * 0.5;
+    if (car.y < -9) {
+      spawnEffect(car.x, -8, car.z, '#ffffff', 6);
+      if (car.isPlayer) Sound.land();
+      g.ph = 'under'; g.t = 0; g.hide = true; car.y = -13;
+    }
+  } else if (g.ph === 'under') {
+    if (g.t >= 0.5) {
+      g.ph = 'up'; g.t = 0; g.hide = false;
+      g.to = (g.idx0 + 28) % N; g.fx = car.x; g.fz = car.z; g.h0 = car.heading;
+      if (car.isPlayer) { Sound.boing(); showBanner('咻～飛回來了！', 1200); }
+    }
+  } else if (g.ph === 'up') {
+    const k = Math.min(1, g.t / 1.3), e = smooth(0, 1, k), q = pts[g.to], hd = headingAt(g.to);
+    car.x = lerp(g.fx, q.x, e); car.z = lerp(g.fz, q.z, e);
+    car.y = lerp(-13, q.y + 6, e) + Math.sin(Math.PI * k) * 10;
+    car.heading = g.h0 + wrapAngle(hd - g.h0) * e + (1 - e) * Math.PI * 4;
+    car.pitch = (1 - e) * 0.6;
+    if (Math.floor(g.t * 14) !== Math.floor((g.t - dt) * 14)) spawnEffect(car.x, car.y, car.z, ['#ff7fbf', '#ffd23f', '#7fd8ff', '#9be08b'][Math.floor(g.t * 14) % 4], 1.2);
+    if (k >= 1) {
+      car.grab = null; car.fallT = 0; car.handed = null;
+      car.heading = car.vdir = hd; car.pitch = 0;
+      updateIdx(car);
+      car.prevIdx = car.idx;
+      car.air = true; car.airT = 0; car.vy = 0; car.glide = false;
+      car.speed = 22; car.invuln = 2; car.spin = 0;
+      car.safeP = car.stuckP = car.lap * N + car.idx; car.stuckT = 0;
+    }
+  }
+}
+
 // 每格更新：潮水、陣風、壓扁機、風車
 function updateNewHazards(dt, cars) {
   const t = state.raceTime;
@@ -1650,6 +1874,7 @@ function updateNewHazards(dt, cars) {
       if (spinnerBlocks(sp, sp.ang, c.lat, along)) hit(c, '被大風車打到了！轉圈圈～');
     }
   }
+  updateHands(dt, cars);
 }
 
 // ================= 音效 =================
@@ -1714,6 +1939,8 @@ const Sound = {
   boing() { this.tone(220, 0.35, 'sine', 0.2, 0, 880); },
   clang() { this.noise(0.25, 0.4); this.tone(140, 0.3, 'square', 0.15, 0, 70); },
   squeak() { this.tone(1500, 0.08, 'square', 0.1, 0, 2200); this.tone(1300, 0.12, 'square', 0.1, 0.1, 700); },
+  whoosh() { this.noise(0.6, 0.25); this.tone(200, 0.6, 'sine', 0.14, 0, 500); },
+  grab() { this.tone(500, 0.12, 'square', 0.14, 0, 260); this.tone(330, 0.3, 'triangle', 0.18, 0.1, 880); },
   boo() { this.tone(660, 0.18, 'sine', 0.16, 0, 990); this.tone(880, 0.22, 'sine', 0.14, 0.15, 520); },
   bark() { this.tone(520, 0.12, 'square', 0.16, 0, 300); this.tone(560, 0.14, 'square', 0.16, 0.18, 320); },
   fanfare() { [523, 659, 784, 1046, 784, 1046].forEach((f, i) => this.tone(f, 0.32, 'triangle', 0.2, i * 0.14)); },
@@ -1724,7 +1951,7 @@ const Sound = {
 const sun = new THREE.DirectionalLight('#fff3e0', 2.4);
 const pads = [], peanuts = [], itemBoxes = [], obstacles = [], villains = [], bombs = [], smokes = [], effects = []
 const lasers = [], traffic = [], snowballs = [], scrollTex = [], solids = [], ghosts = [], penguins = [];
-const crushers = [], spinners = [], tides = [], winds = [];
+const crushers = [], spinners = [], tides = [], winds = [], hands = [];
 const solidGrid = new Map();
 let snowfall = null;
 const hemi = new THREE.HemisphereLight('#ffffff', '#86b86a', 1.5);
@@ -1792,6 +2019,7 @@ function setupGrid(selected) {
     return car;
   });
   state.player = state.cars.find((c) => c.isPlayer);
+  resetHands();
 }
 
 function updateIdx(car) {
@@ -1811,6 +2039,11 @@ function updateIdx(car) {
 function updateCar(car, dt, ctl) {
   car.invuln = Math.max(0, car.invuln - dt);
   car.shield = Math.max(0, car.shield - dt);
+  if (car.grab) {
+    // 被雲朵大手抓住：舉起來的時候由手帶著走，丟下去之後在這裡飛
+    if (car.grab.ph !== 'held') updateGrabbed(car, dt);
+    return;
+  }
   if (car.fallT > 0) {
     // 掉進峽谷，倒數後回到橋前
     car.fallT -= dt;
@@ -2559,6 +2792,8 @@ function aiControl(car, dt) {
       lane = ai.route * clamp(Math.abs(lane), 6, HW - 2);
     }
   }
+  // 雲朵大手在追自己：有一半的機會會往另一邊閃
+  for (const h of hands) if (h.target === car && h.aiDodge && (h.phase === 'slam' || (h.phase === 'aim' && h.t > 1.1))) lane = (h.lat >= 0 ? -1 : 1) * (HW - 2.5);
   // 追趕機制：玩家落到第 3、4 名時，跑在玩家前面的電腦會放慢、偶爾出包
   const pl = state.player;
   const trailing = pl && !car.isPlayer && !pl.finished && ranking().indexOf(pl) >= 2;
@@ -2731,7 +2966,7 @@ function syncModel(car, dt) {
   m.position.set(car.x, car.y, car.z);
   const spinA = car.spin > 0 ? (1 - car.spin / SPIN_T) * Math.PI * 4 : 0;
   m.rotation.set(-car.pitch, car.heading + spinA, 0, 'YXZ');
-  m.visible = !(car.invuln > 0 && car.spin <= 0 && Math.floor(time * 16) % 2 === 0);
+  m.visible = !(car.invuln > 0 && car.spin <= 0 && Math.floor(time * 16) % 2 === 0) && !car.grab?.hide;
   u.shield.visible = car.shield > 0;
   if (car.shield > 0) u.shield.material.opacity = 0.25 + Math.sin(time * 8) * 0.08;
   const sf = Math.min(1, Math.abs(car.speed) / 30);
@@ -3145,14 +3380,24 @@ function updateCamera(dt) {
   const p = pts[c.idx], s = SIDE[c.idx];
   const lat = (want.x - p.x) * s.x + (want.z - p.z) * s.z;
   if (c.fallT <= 0) want.y = Math.max(want.y, surfaceY({ x: want.x, z: want.z, idx: c.idx, s: c.s, lat }) + 1.5);
-  camPos.lerp(want, 1 - Math.exp(-dt * 5));
+  const g = c.grab;
+  if (g) {
+    // 被大手抓走：鏡頭停在路邊往上看、往下看；飛回來時跟在車子後面
+    if (!g.cam) g.cam = camPos.clone().add(new THREE.Vector3(0, 5, 0));
+    if (g.ph === 'up') {
+      const hd = headingAt(g.to);
+      want.set(c.x - Math.sin(hd) * 12, Math.max(c.y + 5, pts[g.to].y + 4), c.z - Math.cos(hd) * 12);
+    } else want.copy(g.cam);
+  }
+  camPos.lerp(want, 1 - Math.exp(-dt * (g ? 3 : 5)));
   camera.position.copy(camPos);
   if (state.shake > 0) {
     state.shake = Math.max(0, state.shake - dt);
     camera.position.x += (Math.random() - 0.5) * state.shake * 2;
     camera.position.y += (Math.random() - 0.5) * state.shake * 2;
   }
-  camLook.set(c.x + fx * 4, c.y + 1.5, c.z + fz * 4);
+  if (g) camLook.lerp(new THREE.Vector3(c.x, c.y + 1, c.z), 1 - Math.exp(-dt * 8));
+  else camLook.set(c.x + fx * 4, c.y + 1.5, c.z + fz * 4);
   camera.lookAt(camLook);
   const fov = 62 + Math.max(0, c.speed) * 0.22 + (c.boost > 0 ? 8 : 0);
   camera.fov = lerp(camera.fov, fov, 1 - Math.exp(-dt * 4));
@@ -3194,7 +3439,7 @@ if (AUTO || params.has('debug')) {
     get EDGE() { return EDGE; },
     get BROKEN_END() { return BROKEN_END; },
     get pts() { return pts; },
-    solids, ghosts, penguins, scene, camera,
+    solids, ghosts, penguins, hands, scene, camera,
     near: (x, z) => nearestIdx(x, z)[0],
     loadTrack(k) { loadTrack(k); state.track = k; setupGrid(state.selected); resetHazards(); },
     place(i, lat, sp) {
