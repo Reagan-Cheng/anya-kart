@@ -1,6 +1,6 @@
 import * as THREE from './lib/three.module.min.js';
-import { TRACKS } from './tracks.js?v=2.2';
-import { createAnyaBuilder } from './anya-model.js?v=2.2';
+import { TRACKS } from './tracks.js?v=2.3';
+import { createAnyaBuilder } from './anya-model.js?v=2.3';
 
 // ================= 小工具 =================
 const $ = (id) => document.getElementById(id);
@@ -277,7 +277,7 @@ function nameTag(cfg) {
 // ================= 賽道 =================
 // 每條賽道的路線、配色與機關寫在 tracks.js；這裡負責把賽道建出來，並提供高度、位置等查詢
 let TRACK = null, world = null, trackIndex = -1;
-let pts = [], TAN = [], SIDE = [], SPACING = 1, isDeck = [], isBroken = [];
+let pts = [], TAN = [], SIDE = [], SPACING = 1, isDeck = [], isBroken = [], FUNNEL = [];
 let EDGE = -1, BROKEN_END = -1;   // 大斷橋：斷口位置與斷掉路段的結尾
 let GAP = null, BRIDGE_I = -1, BC = null, BT = null, BS = null, GAP0 = -1, CANYON_Y = -24, GAP_HALF = 10;
 let CREST = 0, RAMPS = [], LAYOUT = {};
@@ -412,6 +412,17 @@ function loadTrack(k) {
     railless: [], crushers: [], spinners: [], hands: [] }, cfg.layout(T));
   RAMPS = LAYOUT.ramps;
   for (const r of LAYOUT.railless) for (let k = 0; k < r.len; k++) isDeck[(r.i0 + k + N) % N] = false;
+  // 高架橋入口前的漏斗護欄：越接近入口越窄，路外的車會被擠回引道，不會從橋旁邊溜到橋下
+  FUNNEL = pts.map(() => 0);
+  if (!cfg.sky) for (let i0 = 0; i0 < N; i0++) {
+    if (!isDeck[i0] || isDeck[(i0 - 1 + N) % N] || isBroken[(i0 - 1 + N) % N]) continue;
+    const FL = 45;
+    for (let k = 1; k <= FL; k++) {
+      const j = (i0 - k + N) % N;
+      if (isDeck[j] || isBroken[j]) break;
+      FUNNEL[j] = HW + 1.6 + (OFFROAD - 0.6) * smooth(0, FL, k);
+    }
+  }
   for (const a of [pads, peanuts, itemBoxes, obstacles, villains, bombs, smokes, effects, lasers, traffic, snowballs, scrollTex, solids, ghosts, penguins, crushers, spinners, tides, winds, hands]) a.length = 0;
   solidGrid.clear();
   snowfall = null;
@@ -867,6 +878,16 @@ function buildDecks() {
       world.add(m);
     }
   }
+  // 入口前的漏斗護欄（貼著地面，跟橋上的欄杆接起來）
+  for (const [i0, len] of runsOf((i) => FUNNEL[i] > 0)) {
+    for (const sgn of [-1, 1]) {
+      const prof = (i) => { const c = (FUNNEL[i] || HW + 1.6) * sgn; return [[c - 0.2, 0], [c + 0.2, 0], [c + 0.2, 1.15], [c - 0.2, 1.15], [c - 0.2, 0]]; };
+      const base = (i, lat) => { const [x, z] = latPos(i, lat); return groundY(x, z, i, Math.abs(lat)); };
+      const m = new THREE.Mesh(extrudeAlong(i0, len, prof, base), railM);
+      m.castShadow = true;
+      world.add(m);
+    }
+  }
   // 雲端沒有欄杆的路段：路邊放橘色小三角錐提醒
   if (TRACK.sky) {
     const coneGeo = new THREE.ConeGeometry(0.35, 1, 6), coneM = toon('#ff8a1f');
@@ -908,11 +929,12 @@ function runsOf(test) {
   return out;
 }
 // 沿賽道擠出一個斷面（[側向, 高度] 的折線）
-function extrudeAlong(i0, len, prof) {
-  const verts = [], tri = [], cols = prof.length;
+// prof 可以是函式（每個點不同斷面）；base 可指定每個點的底部高度（預設貼著路面）
+function extrudeAlong(i0, len, prof, base) {
+  const verts = [], tri = [], cols = (typeof prof === 'function' ? prof(i0) : prof).length;
   for (let k = 0; k <= len; k++) {
     const i = (i0 + k) % N, p = pts[i], s = SIDE[i];
-    for (const [lat, h] of prof) verts.push(p.x + s.x * lat, p.y + h, p.z + s.z * lat);
+    for (const [lat, h] of typeof prof === 'function' ? prof(i) : prof) verts.push(p.x + s.x * lat, (base ? base(i, lat) : p.y) + h, p.z + s.z * lat);
     if (k < len) for (let c = 0; c < cols - 1; c++) {
       const a = k * cols + c, b = a + cols;
       tri.push(a, b, a + 1, a + 1, b, b + 1);
@@ -2171,7 +2193,9 @@ function updateCar(car, dt, ctl) {
     }
   }
   const railed = (inCanyon && !car.outCanyon) || (isDeck[car.idx] && car.onDeck);
-  const lim = railed ? HW + 1.6 - KART_R * car.scaleNow : HW + OFFROAD;   // 橋上、高架橋上有欄杆（欄杆在 HW+1.6）
+  let lim = railed ? HW + 1.6 - KART_R * car.scaleNow : HW + OFFROAD;   // 橋上、高架橋上有欄杆（欄杆在 HW+1.6）
+  const funnel = !railed && FUNNEL[car.idx] > 0;
+  if (funnel) lim = Math.min(lim, FUNNEL[car.idx] - KART_R * car.scaleNow);
   if (Math.abs(car.lat) > lim) {
     const s = SIDE[car.idx], L = Math.sign(car.lat) * lim;
     car.x -= s.x * (car.lat - L); car.z -= s.z * (car.lat - L); car.lat = L;
@@ -2179,7 +2203,7 @@ function updateCar(car, dt, ctl) {
     const th = headingAt(car.idx);
     car.heading += wrapAngle(th - car.heading) * Math.min(1, dt * 5);
     car.vdir = car.heading;
-    car.speed = Math.max(Math.min(car.speed, 10), car.speed * Math.pow(railed ? 0.7 : 0.3, dt));
+    car.speed = Math.max(Math.min(car.speed, 10), car.speed * Math.pow(railed || funnel ? 0.7 : 0.3, dt));
   }
   // 岔路中間的分隔牆
   for (const d of LAYOUT.dividers) {
